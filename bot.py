@@ -37,6 +37,10 @@ if not GOOGLE_API_KEY:
     logger.error("GOOGLE_API_KEY not found in environment variables")
     sys.exit(1)
 
+STUDIO_WEBHOOK_URL = os.getenv("STUDIO_WEBHOOK_URL")
+if not STUDIO_WEBHOOK_URL:
+    logger.warning("STUDIO_WEBHOOK_URL not found in environment. Call continuation will be disabled.")
+
 # Sync knowledgebase on startup
 logger.info("Syncing knowledgebase from Zammad...")
 try:
@@ -69,12 +73,24 @@ except Exception as e:
 @app.get("/twiml")
 async def twiml(request: Request):
     host = request.url.netloc
+    
+    # Construct the redirect URL for returning to Studio Flow
+    return_url = ""
+    if STUDIO_WEBHOOK_URL:
+        # Append FlowEvent=return if not already present
+        sep = "&" if "?" in STUDIO_WEBHOOK_URL else "?"
+        return_url = f"{STUDIO_WEBHOOK_URL}{sep}FlowEvent=return"
+    
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Connect>
             <Stream url="wss://{host}/ws" />
-        </Connect>
-    </Response>"""
+        </Connect>"""
+    
+    if return_url:
+        twiml_response += f'\n        <Redirect method="POST">{return_url}</Redirect>'
+    
+    twiml_response += "\n    </Response>"
     return Response(content=twiml_response, media_type="application/xml")
 
 @app.websocket("/ws")
