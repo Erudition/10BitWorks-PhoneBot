@@ -1,5 +1,6 @@
 import os
 import sys
+from pathlib import Path
 import asyncio
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, Response
@@ -27,6 +28,16 @@ MODEL_NAME = "models/gemini-3.1-flash-live-preview"
 
 if not GOOGLE_API_KEY:
     logger.error("GOOGLE_API_KEY not found in environment variables")
+    sys.exit(1)
+
+# Load system prompt from file
+SYSTEM_PROMPT_PATH = Path(__file__).parent / "SYSTEM_PROMPT.md"
+try:
+    with open(SYSTEM_PROMPT_PATH, "r") as f:
+        SYSTEM_PROMPT = f.read()
+    logger.info(f"Loaded system prompt from {SYSTEM_PROMPT_PATH}")
+except Exception as e:
+    logger.error(f"Failed to load system prompt from {SYSTEM_PROMPT_PATH}: {e}")
     sys.exit(1)
 
 @app.get("/twiml")
@@ -73,7 +84,7 @@ async def websocket_endpoint(websocket: WebSocket):
         http_options=HttpOptions(api_version="v1alpha"),
         settings=GeminiLiveLLMService.Settings(
             model=MODEL_NAME,
-            system_instruction="You are a helpful phone assistant. Speak naturally and concisely.",
+            system_instruction=SYSTEM_PROMPT,
             voice="Charon",
             enable_affective_dialog=True,
         )
