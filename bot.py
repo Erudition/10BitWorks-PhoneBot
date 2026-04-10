@@ -90,6 +90,19 @@ async def websocket_endpoint(websocket: WebSocket):
         )
     )
 
+    # Workaround: Proactively refresh the session before the 10-minute limit
+    async def refresh_session_loop(llm_service, interval=540):
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                logger.info("Proactively refreshing Gemini Live session...")
+                await llm_service._reconnect()
+                logger.info("Gemini Live session refreshed successfully.")
+            except Exception as e:
+                logger.error(f"Gemini refresh failed: {e}")
+
+    refresh_task = asyncio.create_task(refresh_session_loop(llm))
+
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
@@ -123,6 +136,7 @@ async def websocket_endpoint(websocket: WebSocket):
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info(f"Client disconnected: {client}")
+        refresh_task.cancel()
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=True)
