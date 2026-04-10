@@ -24,6 +24,8 @@ app = FastAPI()
 
 # Configuration
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# Note: Using the model name without the "models/" prefix or v1alpha features
+# was required to resolve the 1011 internal error.
 MODEL_NAME = "gemini-3.1-flash-live-preview"
 
 if not GOOGLE_API_KEY:
