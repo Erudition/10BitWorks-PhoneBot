@@ -52,7 +52,9 @@ async def websocket_endpoint(websocket: WebSocket):
     # Initialize Twilio transport with specific call metadata
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
-        call_sid=call_data["call_id"]
+        call_sid=call_data["call_id"],
+        account_sid=os.getenv("TWILIO_ACCOUNT_SID"),
+        auth_token=os.getenv("TWILIO_AUTH_TOKEN")
     )
 
     transport = FastAPIWebsocketTransport(
