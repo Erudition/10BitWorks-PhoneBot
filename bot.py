@@ -8,7 +8,7 @@ from loguru import logger
 from dotenv import load_dotenv
 
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -105,7 +105,14 @@ async def websocket_endpoint(websocket: WebSocket):
     # Initialize Gemini Live LLM Service (Native S2S)
     tools = ToolsSchema(
         standard_tools=[],
-        custom_tools={AdapterType.GEMINI: [{"google_search": {}}]},
+        custom_tools={AdapterType.GEMINI: [
+            {"google_search": {}},
+            {
+                "end_call": {
+                    "description": "Ends the phone call. Use this when the user is done or asks to hang up."
+                }
+            }
+        ]},
     )
 
     llm = GeminiLiveLLMService(
@@ -117,6 +124,13 @@ async def websocket_endpoint(websocket: WebSocket):
         ),
         tools=tools,
     )
+
+    # Define tool handlers
+    async def hang_up(llm, args):
+        logger.info("Bot is ending the call via end_call tool")
+        await task.queue_frame(EndFrame())
+
+    llm.register_function("end_call", hang_up)
 
     # Workaround: Proactively refresh the session before the 10-minute limit
     async def refresh_session_loop(llm_service, interval=540):
