@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, Response
 from loguru import logger
 from dotenv import load_dotenv
 
+from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
@@ -81,13 +82,19 @@ async def websocket_endpoint(websocket: WebSocket):
     )
 
     # Initialize Gemini Live LLM Service (Native S2S)
+    tools = ToolsSchema(
+        standard_tools=[],
+        custom_tools={AdapterType.GEMINI: [{"google_search": {}}]},
+    )
+
     llm = GeminiLiveLLMService(
         api_key=GOOGLE_API_KEY,
         settings=GeminiLiveLLMService.Settings(
             model=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
-        )
+        ),
+        tools=tools,
     )
 
     # Workaround: Proactively refresh the session before the 10-minute limit
