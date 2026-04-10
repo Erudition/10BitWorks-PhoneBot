@@ -157,7 +157,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Client connected: {client}")
         # Kick off the conversation.
         context.add_message(
-            {"role": "developer", "content": "Please introduce yourself to the user and ask how you can help."}
+            {"role": "developer", "content": "Simply say: 'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"}
         )
         await task.queue_frames([LLMRunFrame()])
 
