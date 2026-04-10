@@ -24,7 +24,7 @@ app = FastAPI()
 
 # Configuration
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-MODEL_NAME = "models/gemini-3.1-flash-live-preview"
+MODEL_NAME = "gemini-3.1-flash-live-preview"
 
 if not GOOGLE_API_KEY:
     logger.error("GOOGLE_API_KEY not found in environment variables")
