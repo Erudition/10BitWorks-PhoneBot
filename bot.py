@@ -147,7 +147,10 @@ async def websocket_endpoint(websocket: WebSocket):
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=True)
-    await runner.run(task)
+    try:
+        await runner.run(task)
+    finally:
+        await websocket.close()
 
 if __name__ == "__main__":
     import uvicorn
