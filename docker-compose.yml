@@ -7,5 +7,5 @@ services:
     ports:
       - "17293:8000"
     env_file:
-      - .env
+      - stack.env
     restart: unless-stopped
