@@ -19,6 +19,8 @@ from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.twilio import TwilioFrameSerializer
 
+import sync_knowledgebase
+
 load_dotenv(override=True)
 
 app = FastAPI()
@@ -33,14 +35,33 @@ if not GOOGLE_API_KEY:
     logger.error("GOOGLE_API_KEY not found in environment variables")
     sys.exit(1)
 
-# Load system prompt from file
+# Sync knowledgebase on startup
+logger.info("Syncing knowledgebase from Zammad...")
+try:
+    sync_knowledgebase.main()
+except Exception as e:
+    logger.error(f"Failed to sync knowledgebase: {e}")
+
+# Load system prompt from file and append knowledgebase
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "SYSTEM_PROMPT.md"
+KNOWLEDGEBASE_DIR = Path(__file__).parent / "knowledgebase"
+
 try:
     with open(SYSTEM_PROMPT_PATH, "r") as f:
         SYSTEM_PROMPT = f.read()
-    logger.info(f"Loaded system prompt from {SYSTEM_PROMPT_PATH}")
+    
+    # Append knowledgebase files
+    if KNOWLEDGEBASE_DIR.exists():
+        kb_content = "\n\n# KNOWLEDGE BASE\n"
+        for md_file in KNOWLEDGEBASE_DIR.glob("**/*.md"):
+            with open(md_file, "r") as f:
+                kb_content += f"\n\n## {md_file.name}\n"
+                kb_content += f.read()
+        SYSTEM_PROMPT += kb_content
+        
+    logger.info(f"Loaded system prompt and knowledgebase. Total length: {len(SYSTEM_PROMPT)}")
 except Exception as e:
-    logger.error(f"Failed to load system prompt from {SYSTEM_PROMPT_PATH}: {e}")
+    logger.error(f"Failed to load system prompt or knowledgebase: {e}")
     sys.exit(1)
 
 @app.get("/twiml")
