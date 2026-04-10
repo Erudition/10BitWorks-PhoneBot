@@ -14,7 +14,7 @@ from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.runner.utils import parse_telephony_websocket
-from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService, HttpOptions
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.twilio import TwilioFrameSerializer
 
@@ -81,12 +81,10 @@ async def websocket_endpoint(websocket: WebSocket):
     # Initialize Gemini Live LLM Service (Native S2S)
     llm = GeminiLiveLLMService(
         api_key=GOOGLE_API_KEY,
-        http_options=HttpOptions(api_version="v1alpha"),
         settings=GeminiLiveLLMService.Settings(
             model=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
-            enable_affective_dialog=True,
         )
     )
 
