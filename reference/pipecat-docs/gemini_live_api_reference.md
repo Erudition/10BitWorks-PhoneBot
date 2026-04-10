@@ -1,0 +1,308 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.pipecat.ai/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Gemini Live
+
+> A real-time, multimodal conversational AI service powered by Google's Gemini
+
+## Overview
+
+`GeminiLiveLLMService` enables natural, real-time conversations with Google's Gemini model. It provides built-in audio transcription, voice activity detection, and context management for creating interactive AI experiences with multimodal capabilities including audio, video, and text processing.
+
+<Tip>
+  Want to start building? Check out our [Gemini Live
+  Guide](/pipecat/features/gemini-live).
+</Tip>
+
+<CardGroup cols={2}>
+  <Card title="Gemini Live API Reference" icon="code" href="https://reference-server.pipecat.ai/en/latest/api/pipecat.services.google.gemini_live.llm.html">
+    Pipecat's API methods for Gemini Live integration
+  </Card>
+
+  <Card title="Example Implementation" icon="play" href="https://github.com/pipecat-ai/pipecat/blob/main/examples/realtime/realtime-gemini-live-function-calling.py">
+    Complete Gemini Live function calling example
+  </Card>
+
+  <Card title="Gemini Documentation" icon="book" href="https://ai.google.dev/gemini-api/docs/live">
+    Official Google Gemini Live API documentation
+  </Card>
+
+  <Card title="Gemini Live Model Card" icon="book" href="https://ai.google.dev/gemini-api/docs/models#gemini-2.5-flash-live">
+    Gemini Live available models
+  </Card>
+</CardGroup>
+
+## Installation
+
+To use Gemini Live services, install the required dependencies:
+
+```bash  theme={null}
+pip install "pipecat-ai[google]"
+```
+
+## Prerequisites
+
+### Google AI Setup
+
+Before using Gemini Live services, you need:
+
+1. **Google Account**: Set up at [Google AI Studio](https://aistudio.google.com/)
+2. **API Key**: Generate a Gemini API key from AI Studio
+3. **Model Access**: Ensure access to Gemini Live models
+4. **Multimodal Configuration**: Set up audio, video, and text modalities
+
+### Required Environment Variables
+
+* `GOOGLE_API_KEY`: Your Google Gemini API key for authentication
+
+### Key Features
+
+* **Multimodal Processing**: Handle audio, video, and text inputs simultaneously
+* **Real-time Streaming**: Low-latency audio and video processing
+* **Voice Activity Detection**: Automatic speech detection and turn management
+* **Function Calling**: Advanced tool integration and API calling capabilities
+* **Context Management**: Intelligent conversation history and system instruction handling
+
+## Configuration
+
+### GeminiLiveLLMService
+
+<ParamField path="api_key" type="str" required>
+  Google AI API key for authentication.
+</ParamField>
+
+<ParamField path="model" type="str" default="models/gemini-2.5-flash-native-audio-preview-12-2025" deprecated>
+  Gemini model identifier to use.
+
+  *Deprecated in v0.0.105. Use `settings=GeminiLiveLLMService.Settings(model=...)` instead.*
+</ParamField>
+
+<ParamField path="voice_id" type="str" default="Charon" deprecated>
+  TTS voice identifier for audio responses.
+
+  *Deprecated in v0.0.105. Use `settings=GeminiLiveLLMService.Settings(voice=...)` instead.*
+</ParamField>
+
+<ParamField path="system_instruction" type="str" default="None">
+  System prompt for the model. Can also be provided via the LLM context.
+</ParamField>
+
+<ParamField path="tools" type="List[dict] | ToolsSchema" default="None">
+  Tools/functions available to the model. Can also be provided via the LLM
+  context.
+</ParamField>
+
+<ParamField path="params" type="InputParams" default="InputParams()" deprecated>
+  Runtime-configurable generation and session settings. See
+  [InputParams](#inputparams) below.
+
+  *Deprecated in v0.0.105. Use `settings=GeminiLiveLLMService.Settings(...)` instead.*
+</ParamField>
+
+<ParamField path="settings" type="GeminiLiveLLMService.Settings" default="None">
+  Runtime-configurable settings. See [Settings](#settings) below.
+</ParamField>
+
+<ParamField path="start_audio_paused" type="bool" default="False">
+  Whether to start with audio input paused.
+</ParamField>
+
+<ParamField path="start_video_paused" type="bool" default="False">
+  Whether to start with video input paused.
+</ParamField>
+
+<ParamField path="inference_on_context_initialization" type="bool" default="True">
+  Whether to generate a response when context is first set. Set to `False` to
+  wait for user input before the model responds.
+</ParamField>
+
+<ParamField path="http_options" type="HttpOptions" default="None">
+  HTTP options for the Google API client. Use this to set API version (e.g.
+  `HttpOptions(api_version="v1alpha")`) or other request options.
+</ParamField>
+
+<ParamField path="file_api_base_url" type="str" default="https://generativelanguage.googleapis.com/v1beta/files">
+  Base URL for the Gemini File API.
+</ParamField>
+
+### Settings
+
+Runtime-configurable settings passed via the `settings` constructor argument using `GeminiLiveLLMService.Settings(...)`. These can be updated mid-conversation with `LLMUpdateSettingsFrame`. See [Service Settings](/pipecat/fundamentals/service-settings) for details.
+
+| Parameter                    | Type                                     | Default     | Description                                                                                                                          |
+| ---------------------------- | ---------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `model`                      | `str`                                    | `NOT_GIVEN` | Model identifier. *(Inherited from base settings.)*                                                                                  |
+| `system_instruction`         | `str`                                    | `NOT_GIVEN` | System instruction/prompt. *(Inherited from base settings.)*                                                                         |
+| `temperature`                | `float`                                  | `NOT_GIVEN` | Sampling temperature (0.0-2.0). *(Inherited from base settings.)*                                                                    |
+| `max_tokens`                 | `int`                                    | `NOT_GIVEN` | Maximum tokens to generate. *(Inherited from base settings.)*                                                                        |
+| `top_k`                      | `int`                                    | `NOT_GIVEN` | Top-k sampling parameter. *(Inherited from base settings.)*                                                                          |
+| `top_p`                      | `float`                                  | `NOT_GIVEN` | Top-p (nucleus) sampling parameter (0.0-1.0). *(Inherited from base settings.)*                                                      |
+| `frequency_penalty`          | `float`                                  | `NOT_GIVEN` | Frequency penalty for generation (0.0-2.0). *(Inherited from base settings.)*                                                        |
+| `presence_penalty`           | `float`                                  | `NOT_GIVEN` | Presence penalty for generation (0.0-2.0). *(Inherited from base settings.)*                                                         |
+| `voice`                      | `str`                                    | `NOT_GIVEN` | TTS voice identifier (e.g. `"Charon"`, `"Puck"`).                                                                                    |
+| `modalities`                 | `GeminiModalities`                       | `NOT_GIVEN` | Response modality: `GeminiModalities.AUDIO` or `GeminiModalities.TEXT`. *Note: TEXT modality may not be supported by recent models.* |
+| `language`                   | `Language \| str`                        | `NOT_GIVEN` | Language for generation and transcription.                                                                                           |
+| `media_resolution`           | `GeminiMediaResolution`                  | `NOT_GIVEN` | Media resolution for video input: `UNSPECIFIED`, `LOW`, `MEDIUM`, or `HIGH`.                                                         |
+| `vad`                        | `GeminiVADParams`                        | `NOT_GIVEN` | Voice activity detection parameters. See [GeminiVADParams](#geminivadparams) below.                                                  |
+| `context_window_compression` | `ContextWindowCompressionParams \| dict` | `NOT_GIVEN` | Context window compression settings.                                                                                                 |
+| `thinking`                   | `ThinkingConfig \| dict`                 | `NOT_GIVEN` | Thinking/reasoning configuration. Requires a model that supports it.                                                                 |
+| `enable_affective_dialog`    | `bool`                                   | `NOT_GIVEN` | Enable affective dialog for expression and tone adaptation.                                                                          |
+| `proactivity`                | `ProactivityConfig \| dict`              | `NOT_GIVEN` | Proactivity settings for model behavior.                                                                                             |
+
+<Note>
+  `NOT_GIVEN` values are omitted, letting the service use its own defaults (e.g.
+  `"models/gemini-2.5-flash-native-audio-preview-12-2025"` for model, `"Charon"`
+  for voice, `4096` for max\_tokens). Only parameters that are explicitly set are
+  included.
+</Note>
+
+### GeminiVADParams
+
+Voice activity detection configuration passed via the `vad` Settings field:
+
+| Parameter             | Type               | Default | Description                                                                                                     |
+| --------------------- | ------------------ | ------- | --------------------------------------------------------------------------------------------------------------- |
+| `disabled`            | `bool`             | `None`  | Whether to disable server-side VAD. `None`/`False` enables server-side VAD (default), `True` enables local VAD. |
+| `start_sensitivity`   | `StartSensitivity` | `None`  | Sensitivity for speech start detection.                                                                         |
+| `end_sensitivity`     | `EndSensitivity`   | `None`  | Sensitivity for speech end detection.                                                                           |
+| `prefix_padding_ms`   | `int`              | `None`  | Padding before speech starts in milliseconds.                                                                   |
+| `silence_duration_ms` | `int`              | `None`  | Silence duration threshold in milliseconds to detect speech end.                                                |
+
+### ContextWindowCompressionParams
+
+| Parameter        | Type   | Default | Description                                                                          |
+| ---------------- | ------ | ------- | ------------------------------------------------------------------------------------ |
+| `enabled`        | `bool` | `False` | Whether context window compression is enabled.                                       |
+| `trigger_tokens` | `int`  | `None`  | Token count to trigger compression. `None` uses the default (80% of context window). |
+
+## Usage
+
+### Basic Setup
+
+```python  theme={null}
+import os
+from pipecat.services.google.gemini_live import GeminiLiveLLMService
+
+llm = GeminiLiveLLMService(
+    api_key=os.getenv("GOOGLE_API_KEY"),
+    settings=GeminiLiveLLMService.Settings(
+        voice="Charon",
+        system_instruction="You are a helpful assistant.",
+    ),
+)
+```
+
+### With Settings
+
+```python  theme={null}
+from pipecat.services.google.gemini_live import (
+    GeminiLiveLLMService,
+    GeminiVADParams,
+    ContextWindowCompressionParams,
+)
+
+llm = GeminiLiveLLMService(
+    api_key=os.getenv("GOOGLE_API_KEY"),
+    settings=GeminiLiveLLMService.Settings(
+        model="models/gemini-2.5-flash-native-audio-preview-12-2025",
+        system_instruction="You are a helpful assistant.",
+        voice="Puck",
+        temperature=0.7,
+        max_tokens=2048,
+        language="en-US",
+        vad=GeminiVADParams(
+            silence_duration_ms=500,
+        ),
+        context_window_compression={"enabled": True},
+    ),
+)
+```
+
+### With Local VAD
+
+```python  theme={null}
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.services.google.gemini_live import (
+    GeminiLiveLLMService,
+    GeminiVADParams,
+)
+from pipecat.processors.aggregators.llm_response_universal import (
+    LLMContextAggregatorPair,
+    LLMUserAggregatorParams,
+)
+
+llm = GeminiLiveLLMService(
+    api_key=os.getenv("GOOGLE_API_KEY"),
+    settings=GeminiLiveLLMService.Settings(
+        voice="Charon",
+        vad=GeminiVADParams(disabled=True),  # Disable server-side VAD
+    ),
+)
+
+# Configure local VAD in your aggregator
+user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
+    context,
+    user_params=LLMUserAggregatorParams(
+        vad_analyzer=SileroVADAnalyzer(),
+    ),
+)
+```
+
+### Text-Only Mode
+
+<Warning>
+  TEXT modality may not be supported by recent Gemini Live models. The service
+  will log a warning if you configure `modalities=GeminiModalities.TEXT`.
+</Warning>
+
+```python  theme={null}
+from pipecat.services.google.gemini_live import (
+    GeminiLiveLLMService,
+    GeminiModalities,
+)
+
+llm = GeminiLiveLLMService(
+    api_key=os.getenv("GOOGLE_API_KEY"),
+    settings=GeminiLiveLLMService.Settings(
+        system_instruction="You are a helpful assistant.",
+        modalities=GeminiModalities.TEXT,
+    ),
+)
+```
+
+### With Thinking Enabled
+
+```python  theme={null}
+from google.genai.types import ThinkingConfig
+
+llm = GeminiLiveLLMService(
+    api_key=os.getenv("GOOGLE_API_KEY"),
+    settings=GeminiLiveLLMService.Settings(
+        model="models/gemini-2.5-flash-native-audio-preview-12-2025",
+        system_instruction="You are a helpful assistant.",
+        thinking=ThinkingConfig(include_thoughts=True),
+    ),
+)
+```
+
+<Tip>
+  The `InputParams` / `params=` pattern is deprecated as of v0.0.105. Use
+  `Settings` / `settings=` instead. See the [Service Settings
+  guide](/pipecat/fundamentals/service-settings) for migration details.
+</Tip>
+
+## Notes
+
+* **Model support**: The service supports both Gemini 2.5 and Gemini 3.x models. The service automatically detects and handles model-specific behavior.
+* **System instruction precedence**: The `system_instruction` from service settings takes precedence over an initial system message in the LLM context. A warning is logged when both are set.
+* **VAD modes**: By default, Gemini Live uses server-side VAD for detecting when the user starts and stops speaking. To use local VAD (e.g., Silero), set `vad=GeminiVADParams(disabled=True)` and configure an external VAD analyzer in your `LLMUserAggregatorParams`. The service will automatically send activity signals to the Gemini API when local VAD detects speech.
+* **Tools precedence**: Similarly, tools provided in the context override tools provided at init time.
+* **Transcription aggregation**: Gemini Live sends user transcriptions in small chunks. The service aggregates them into complete sentences using end-of-sentence detection with a 0.5-second timeout fallback.
+* **Session resumption**: The service automatically handles session resumption on reconnection using session resumption handles.
+* **Connection resilience**: The service will attempt up to 3 consecutive reconnections before treating a connection failure as fatal.
+* **Video frame rate**: Video frames are throttled to a maximum of one per second.
+* **Affective dialog and proactivity**: These features require both a supporting model and API version (`v1alpha`).
+
+
+Built with [Mintlify](https://mintlify.com).
