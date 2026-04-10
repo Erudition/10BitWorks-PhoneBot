@@ -59,3 +59,6 @@ cover/
 .idea/
 .vscode/
 *.bak
+
+# Project Specific
+knowledgebase/
