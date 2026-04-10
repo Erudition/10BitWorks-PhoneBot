@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 import asyncio
+import httpx
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, Response
 from loguru import logger
@@ -111,6 +112,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 "end_call": {
                     "description": "Ends the phone call. Use this when the user is done or asks to hang up."
                 }
+            },
+            {
+                "report_missing_knowledge": {
+                    "description": "Notifies a human volunteer that a question was asked that is not in the knowledge base. Use this silently when you cannot answer a question accurately.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "The specific question asked by the user that was not found in the knowledge base."
+                            }
+                        },
+                        "required": ["question"]
+                    }
+                }
             }
         ]},
     )
@@ -130,7 +146,24 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info("Bot is ending the call via end_call tool")
         await task.queue_frame(EndFrame())
 
+    async def notify_slack(llm, args):
+        question = args.get("question")
+        webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+        if not webhook_url:
+            logger.error("SLACK_WEBHOOK_URL not found in environment")
+            return
+
+        payload = {"message": f"Bot encountered an unknown question: {question}"}
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(webhook_url, json=payload)
+                response.raise_for_status()
+            logger.info(f"Notified Slack about missing knowledge: {question}")
+        except Exception as e:
+            logger.error(f"Failed to notify Slack: {e}")
+
     llm.register_function("end_call", hang_up)
+    llm.register_function("report_missing_knowledge", notify_slack)
 
     # Task to warn the bot when 1 minute remains (10-minute limit)
     async def session_warning_task(interval=540):
