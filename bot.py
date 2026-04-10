@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, Response
 from loguru import logger
 from dotenv import load_dotenv
 
+from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.frames.frames import LLMRunFrame, EndFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -105,30 +106,24 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Initialize Gemini Live LLM Service (Native S2S)
     tools = ToolsSchema(
-        standard_tools=[],
-        custom_tools={AdapterType.GEMINI: [
-            {"google_search": {}},
-            {
-                "end_call": {
-                    "description": "Ends the phone call. Use this when the user is done or asks to hang up."
-                }
-            },
-            {
-                "report_missing_knowledge": {
-                    "description": "Notifies a human volunteer that a question was asked that is not in the knowledge base. Use this silently when you cannot answer a question accurately.",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "question": {
-                                "type": "string",
-                                "description": "The specific question asked by the user that was not found in the knowledge base."
-                            }
-                        },
-                        "required": ["question"]
+        standard_tools=[
+            FunctionSchema(
+                name="end_call",
+                description="Ends the phone call. Use this when the user is done or asks to hang up."
+            ),
+            FunctionSchema(
+                name="report_missing_knowledge",
+                description="Writes to the log that a question was asked that is not in the knowledge base. Use this silently when you cannot answer a question accurately. Data will be analyzed at a later time to improve the knowledge base.",
+                properties={
+                    "question": {
+                        "type": "string",
+                        "description": "The specific question asked by the user that was not found in the knowledge base."
                     }
-                }
-            }
-        ]},
+                },
+                required=["question"]
+            )
+        ],
+        custom_tools={AdapterType.GEMINI: [{"google_search": {}}]},
     )
 
     llm = GeminiLiveLLMService(
@@ -218,8 +213,8 @@ async def websocket_endpoint(websocket: WebSocket):
     runner = PipelineRunner(handle_sigint=True)
     try:
         await runner.run(task)
-    finally:
-        await websocket.close()
+    except Exception as e:
+        logger.error(f"Error running pipeline: {e}")
 
 if __name__ == "__main__":
     import uvicorn
