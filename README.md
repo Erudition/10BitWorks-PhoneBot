@@ -31,7 +31,7 @@ This project implements a locally hosted Pipecat instance that routes audio betw
    ```
 2. In a separate terminal, expose the local server using ngrok:
    ```bash
-   ngrok http 8000
+   ngrok http 17293
    ```
 3. Note the ngrok forwarding URL (e.g., `https://xxxx-xxxx.ngrok-free.app`).
 

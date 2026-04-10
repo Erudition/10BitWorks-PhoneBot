@@ -1,0 +1,6 @@
+{ "mcpServers": {
+    "pipecat-docs": { 
+        "url": "https://daily-docs.mcp.kapa.ai" 
+    }
+  }
+}
