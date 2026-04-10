@@ -132,18 +132,19 @@ async def websocket_endpoint(websocket: WebSocket):
 
     llm.register_function("end_call", hang_up)
 
-    # Workaround: Proactively refresh the session before the 10-minute limit
-    async def refresh_session_loop(llm_service, interval=540):
-        while True:
-            await asyncio.sleep(interval)
-            try:
-                logger.info("Proactively refreshing Gemini Live session...")
-                await llm_service._reconnect()
-                logger.info("Gemini Live session refreshed successfully.")
-            except Exception as e:
-                logger.error(f"Gemini refresh failed: {e}")
+    # Task to warn the bot when 1 minute remains (10-minute limit)
+    async def session_warning_task(interval=540):
+        await asyncio.sleep(interval)
+        try:
+            logger.info("Sending 1-minute session warning to bot context.")
+            context.add_message(
+                {"role": "developer", "content": "SYSTEM WARNING: There is only 1 minute remaining in this call due to a technical limit. Please politely wrap up the conversation and inform the user if necessary."}
+            )
+            await task.queue_frames([LLMRunFrame()])
+        except Exception as e:
+            logger.error(f"Failed to send session warning: {e}")
 
-    refresh_task = asyncio.create_task(refresh_session_loop(llm))
+    warning_task = asyncio.create_task(session_warning_task())
 
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
@@ -178,7 +179,7 @@ async def websocket_endpoint(websocket: WebSocket):
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info(f"Client disconnected: {client}")
-        refresh_task.cancel()
+        warning_task.cancel()
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=True)
