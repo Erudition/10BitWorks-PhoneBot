@@ -325,6 +325,8 @@ async def websocket_endpoint(websocket: WebSocket):
         await runner.run(task)
     except Exception as e:
         logger.error(f"Error running pipeline: {e}")
+    finally:
+        await websocket.close()
 
 if __name__ == "__main__":
     import uvicorn
