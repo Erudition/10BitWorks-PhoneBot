@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 import asyncio
 import httpx
@@ -10,7 +11,7 @@ from dotenv import load_dotenv
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, EndTaskFrame, CancelTaskFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -44,9 +45,9 @@ STUDIO_WEBHOOK_URL = os.getenv("STUDIO_WEBHOOK_URL")
 if not STUDIO_WEBHOOK_URL:
     logger.warning("STUDIO_WEBHOOK_URL not found in environment. Call continuation will be disabled.")
 
-# Global state for call transfers
-# In production, use a TTL cache or Redis instead of a simple dict
+# Global state for call transfers and hangups
 pending_transfers = {}
+pending_hangups = set()
 
 # Sync knowledgebase on startup
 logger.info("Syncing knowledgebase from Zammad...")
@@ -82,8 +83,6 @@ async def twiml(request: Request):
     host = request.url.netloc
     
     # Construct the redirect URL for returning to Studio Flow
-    # We point to our /post_bot endpoint instead of directly back to Studio
-    # so we can intercept any requested transfers.
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Connect>
@@ -136,6 +135,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # Use Pipecat utility to parse the initial Twilio handshake
     transport_type, call_data = await parse_telephony_websocket(websocket)
     logger.info(f"Accepted {transport_type} call: {call_data}")
+
     # Initialize Twilio transport with specific call metadata
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
@@ -168,11 +168,11 @@ async def websocket_endpoint(websocket: WebSocket):
             ),
             FunctionSchema(
                 name="report_missing_knowledge",
-                description="Writes to the log that a question was asked that is not in the knowledge base. Use this silently when you cannot answer a question accurately. Data will be analyzed at a later time to improve the knowledge base.",
+                description="Writes to the log that a question was asked that is not in the knowledge base. Use this silently when you cannot answer a question accurately.",
                 properties={
                     "question": {
                         "type": "string",
-                        "description": "The specific question asked by the user that was not found in the knowledge base."
+                        "description": "The specific question asked by the user."
                     }
                 },
                 required=["question"]
@@ -217,71 +217,52 @@ async def websocket_endpoint(websocket: WebSocket):
     async def hang_up(params: FunctionCallParams):
         call_sid = call_data["call_id"]
         logger.info(f"Bot is ending the call {call_sid} via end_call tool")
-        
-        # Register the hangup intent so the fallback returns <Hangup/> instead of returning to Studio
         pending_hangups.add(call_sid)
-        
         await params.result_callback({"status": "hanging_up"})
-        # Use CancelTaskFrame for immediate pipeline exit
         await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def notify_slack(params: FunctionCallParams):
         question = params.arguments.get("question")
-        webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-        if not webhook_url:
-            logger.error("SLACK_WEBHOOK_URL not found in environment")
-            await params.result_callback({"status": "error", "message": "Slack webhook not configured"})
-            return
-
-        payload = {"message": f"Receptionist fielded a question that is not answered in the current knowledge base: {question}"}
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                response = await client.post(webhook_url, json=payload)
-                response.raise_for_status()
-            logger.info(f"Notified Slack about missing knowledge: {question}")
-            await params.result_callback({"status": "success", "message": "Logged for further review."})
-        except Exception as e:
-            logger.error(f"Failed to notify Slack: {e}")
-            await params.result_callback({"status": "error", "message": str(e)})
+        async def send_to_slack(q):
+            webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+            if not webhook_url:
+                logger.error("SLACK_WEBHOOK_URL not found in environment")
+                return
+            payload = {"message": f"Receptionist fielded a question that is not answered in the current knowledge base: {q}"}
+            try:
+                async with httpx.AsyncClient(timeout=4.5) as client:
+                    response = await client.post(webhook_url, json=payload)
+                    response.raise_for_status()
+                logger.info(f"Notified Slack about missing knowledge: {q}")
+            except Exception as e:
+                logger.error(f"Failed to notify Slack: {e}")
+        asyncio.create_task(send_to_slack(question))
+        await params.result_callback({"status": "success", "message": "Feedback submitted."})
 
     async def start_transfer(params: FunctionCallParams):
         phone_number = params.arguments.get("phone_number")
         call_sid = call_data["call_id"]
         logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
-        
-        # Register the transfer intent
         pending_transfers[call_sid] = phone_number
-        
         await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
-        # End the pipeline to allow the /post_bot fallback to take over
         await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
         logger.info(f"Bot requesting CiviCRM lookup for: {contact_name}")
-        
         try:
-            # Wrap lookup in a timeout to prevent hanging the bot process
             contacts = await asyncio.wait_for(civicrm_lookup.lookup_contact_by_name(contact_name), timeout=4.5)
-            
-            # Success check: unique contact with unique phone
             if len(contacts) == 1 and len(contacts[0]["phones"]) == 1:
                 contact = contacts[0]
                 phone_number = contact["phones"][0]["number"]
-                
-                logger.info(f"Unique match found for {contact_name}: {phone_number}. Returning number to Gemini.")
-                await params.result_callback({"status": "success", "phone_number": phone_number, "message": f"Found {contact_name} with number {phone_number}. You can now ask the user if they want to transfer, and then use transfer_call."})
+                logger.info(f"Unique match found for {contact_name}: {phone_number}.")
+                await params.result_callback({"status": "success", "phone_number": phone_number, "message": f"Found {contact_name}."})
                 return
-
-            # Disambiguation or error
             error_msg = civicrm_lookup.format_disambiguation_message(contacts)
-            logger.info(f"CiviCRM lookup for {contact_name} requires disambiguation: {error_msg}")
             await params.result_callback({"status": "error", "message": error_msg})
         except asyncio.TimeoutError:
-            logger.error(f"CiviCRM lookup timed out for: {contact_name}")
-            await params.result_callback({"status": "error", "message": "The lookup service is currently slow. Please try again."})
+            await params.result_callback({"status": "error", "message": "Lookup timed out."})
         except Exception as e:
-            logger.error(f"CiviCRM lookup failed: {e}")
             await params.result_callback({"status": "error", "message": str(e)})
 
     llm.register_function("end_call", hang_up, cancel_on_interruption=False, timeout_secs=5.0)
@@ -289,13 +270,13 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("transfer_call", start_transfer, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
 
-    # Task to warn the bot when 1 minute remains (10-minute limit)
+    # Task to warn the bot when 1 minute remains
     async def session_warning_task(interval=540):
         await asyncio.sleep(interval)
         try:
             logger.info("Sending 1-minute session warning to bot context.")
             context.add_message(
-                {"role": "developer", "content": "SYSTEM WARNING: There is only 1 minute remaining in this call due to a technical limit. Please politely wrap up the conversation and inform the user if necessary."}
+                {"role": "developer", "content": "SYSTEM WARNING: There is only 1 minute remaining in this call. Please wrap up."}
             )
             await task.queue_frames([LLMRunFrame()])
         except Exception as e:
@@ -317,8 +298,8 @@ async def websocket_endpoint(websocket: WebSocket):
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
-            audio_in_sample_rate=8000,  # Twilio standard
-            audio_out_sample_rate=8000, # Twilio standard
+            audio_in_sample_rate=8000,
+            audio_out_sample_rate=8000,
             enable_metrics=True,
             enable_usage_metrics=True,
         )
@@ -327,7 +308,6 @@ async def websocket_endpoint(websocket: WebSocket):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info(f"Client connected: {client}")
-        # Kick off the conversation.
         now = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
         context.add_message(
             {"role": "developer", "content": f"The current date and time is {now}. Simply say: 'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"}
@@ -353,5 +333,4 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    # Local dev server
     uvicorn.run(app, host="0.0.0.0", port=8000)
