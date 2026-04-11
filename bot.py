@@ -153,8 +153,7 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            serializer=serializer,
-            audio_out_10ms_chunks=2
+            serializer=serializer
         )
     )
 
@@ -226,21 +225,22 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def notify_slack(params: FunctionCallParams):
         observation = params.arguments.get("observation")
-        async def send_to_slack(obs):
-            webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-            if not webhook_url:
-                logger.error("SLACK_WEBHOOK_URL not found in environment")
-                return
-            payload = {"message": f"Knowledge Base Gap Reported:\n{obs}"}
-            try:
-                async with httpx.AsyncClient(timeout=4.5) as client:
-                    response = await client.post(webhook_url, json=payload)
-                    response.raise_for_status()
-                logger.info(f"Notified Slack about missing knowledge: {obs[:50]}...")
-            except Exception as e:
-                logger.error(f"Failed to notify Slack: {e}")
-        asyncio.create_task(send_to_slack(observation))
-        await params.result_callback({"status": "success", "message": "Observation logged for review. Continue the conversation naturally."})
+        webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+        if not webhook_url:
+            logger.error("SLACK_WEBHOOK_URL not found in environment")
+            await params.result_callback({"status": "error", "message": "Slack webhook not configured"})
+            return
+
+        payload = {"message": f"Knowledge Base Gap Reported:\n{observation}"}
+        try:
+            async with httpx.AsyncClient(timeout=4.5) as client:
+                response = await client.post(webhook_url, json=payload)
+                response.raise_for_status()
+            logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
+            await params.result_callback({"status": "success", "message": "Observation logged for review. Continue the conversation naturally."})
+        except Exception as e:
+            logger.error(f"Failed to notify Slack: {e}")
+            await params.result_callback({"status": "error", "message": str(e)})
 
     async def start_transfer(params: FunctionCallParams):
         phone_number = params.arguments.get("phone_number")
