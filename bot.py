@@ -153,7 +153,9 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            serializer=serializer
+            serializer=serializer,
+            # Continuously send silence when bot is not speaking to keep Twilio sync'd
+            audio_out_can_send_silence=True
         )
     )
 
