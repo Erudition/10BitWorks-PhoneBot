@@ -210,6 +210,7 @@ async def websocket_endpoint(websocket: WebSocket):
             self.is_speaking = False
 
         async def process_frame(self, frame: Frame, direction: FrameDirection):
+            await super().process_frame(frame, direction)
             # Intercept frames pushed UPSTREAM by the output transport
             if isinstance(frame, BotStartedSpeakingFrame):
                 self.is_speaking = True
