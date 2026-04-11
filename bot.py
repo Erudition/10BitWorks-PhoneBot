@@ -10,12 +10,13 @@ from dotenv import load_dotenv
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, EndTaskFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
@@ -209,7 +210,8 @@ async def websocket_endpoint(websocket: WebSocket):
     async def hang_up(params: FunctionCallParams):
         logger.info("Bot is ending the call via end_call tool")
         await params.result_callback({"status": "hanging_up"})
-        await task.queue_frame(EndFrame())
+        # Gemini Live requires EndTaskFrame UPSTREAM for graceful pipeline termination
+        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
 
     async def notify_slack(params: FunctionCallParams):
         question = params.arguments.get("question")
@@ -221,7 +223,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
         payload = {"message": f"Receptionist fielded a question that is not answered in the current knowledge base: {question}"}
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(webhook_url, json=payload)
                 response.raise_for_status()
             logger.info(f"Notified Slack about missing knowledge: {question}")
@@ -240,30 +242,38 @@ async def websocket_endpoint(websocket: WebSocket):
         
         await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
         # End the pipeline to allow the /post_bot fallback to take over
-        await task.queue_frame(EndFrame())
+        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
 
     async def lookup_and_transfer(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
         logger.info(f"Bot requesting CiviCRM lookup for: {contact_name}")
         
-        contacts = await civicrm_lookup.lookup_contact_by_name(contact_name)
-        
-        # Success check: unique contact with unique phone
-        if len(contacts) == 1 and len(contacts[0]["phones"]) == 1:
-            contact = contacts[0]
-            phone_number = contact["phones"][0]["number"]
-            call_sid = call_data["call_id"]
+        try:
+            # Wrap lookup in a timeout to prevent hanging the bot process
+            contacts = await asyncio.wait_for(civicrm_lookup.lookup_contact_by_name(contact_name), timeout=10.0)
             
-            logger.info(f"Unique match found for {contact_name}: {phone_number}. Initiating transfer.")
-            pending_transfers[call_sid] = phone_number
-            await task.queue_frame(EndFrame())
-            await params.result_callback({"status": "success", "message": f"Transferring to {contact_name}..."})
-            return
+            # Success check: unique contact with unique phone
+            if len(contacts) == 1 and len(contacts[0]["phones"]) == 1:
+                contact = contacts[0]
+                phone_number = contact["phones"][0]["number"]
+                call_sid = call_data["call_id"]
+                
+                logger.info(f"Unique match found for {contact_name}: {phone_number}. Initiating transfer.")
+                pending_transfers[call_sid] = phone_number
+                await params.result_callback({"status": "success", "message": f"Transferring to {contact_name}..."})
+                await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+                return
 
-        # Disambiguation or error
-        error_msg = civicrm_lookup.format_disambiguation_message(contacts)
-        logger.info(f"CiviCRM lookup for {contact_name} requires disambiguation: {error_msg}")
-        await params.result_callback({"status": "error", "message": error_msg})
+            # Disambiguation or error
+            error_msg = civicrm_lookup.format_disambiguation_message(contacts)
+            logger.info(f"CiviCRM lookup for {contact_name} requires disambiguation: {error_msg}")
+            await params.result_callback({"status": "error", "message": error_msg})
+        except asyncio.TimeoutError:
+            logger.error(f"CiviCRM lookup timed out for: {contact_name}")
+            await params.result_callback({"status": "error", "message": "The lookup service is currently slow. Please try again."})
+        except Exception as e:
+            logger.error(f"CiviCRM lookup failed: {e}")
+            await params.result_callback({"status": "error", "message": str(e)})
 
     llm.register_function("end_call", hang_up)
     llm.register_function("report_missing_knowledge", notify_slack)
