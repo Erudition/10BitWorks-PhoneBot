@@ -219,8 +219,9 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
         await params.result_callback({"status": "hanging_up"})
-        # Use EndTaskFrame to allow the bot to finish speaking before closing the connection
-        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+        # Fast-track shutdown to bypass the 30s Gemini Live EndFrame deferral bug
+        await asyncio.sleep(0.5)
+        await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def notify_slack(params: FunctionCallParams):
         observation = params.arguments.get("observation")
@@ -246,8 +247,9 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
         pending_transfers[call_sid] = phone_number
         await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
-        # Use EndTaskFrame to ensure the bot finishes its sentence before the redirect happens
-        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+        # Fast-track shutdown to bypass the 30s Gemini Live EndFrame deferral bug
+        await asyncio.sleep(0.5)
+        await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
