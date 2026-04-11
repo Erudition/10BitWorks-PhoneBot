@@ -152,7 +152,7 @@ async def websocket_endpoint(websocket: WebSocket):
         standard_tools=[
             FunctionSchema(
                 name="end_call",
-                description="Ends the phone call. Use this when the user is done or asks to hang up.",
+                description="Ends the phone call. CRITICAL: You MUST call this tool immediately in the exact same turn after you say goodbye or conclude the conversation. Do not wait for the user to hang up first.",
                 properties={},
                 required=[]
             ),
