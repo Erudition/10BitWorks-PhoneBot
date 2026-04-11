@@ -17,7 +17,6 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
-from pipecat.processors.audio.fixed_size_scheduler import FixedSizeScheduler
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.runner.utils import parse_telephony_websocket
@@ -154,7 +153,8 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            serializer=serializer
+            serializer=serializer,
+            audio_out_10ms_chunks=2
         )
     )
 
@@ -296,7 +296,6 @@ async def websocket_endpoint(websocket: WebSocket):
         transport.input(),
         user_aggregator,
         llm,
-        FixedSizeScheduler(chunk_size=160), # 20ms of audio at 8kHz (160 samples)
         transport.output(),
         assistant_aggregator,
     ])
