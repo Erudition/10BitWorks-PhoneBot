@@ -153,7 +153,8 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            serializer=serializer
+            serializer=serializer,
+            audio_out_is_resettable=True
         )
     )
 
@@ -299,6 +300,7 @@ async def websocket_endpoint(websocket: WebSocket):
         assistant_aggregator,
     ])
 
+    # Tweak the task to send prefatory silence (warm-up audio) to Twilio
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
@@ -306,6 +308,8 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_sample_rate=8000,
             enable_metrics=True,
             enable_usage_metrics=True,
+            # Send 200ms of silence before bot speech to "warm up" Twilio WebSocket
+            prefatory_silence_threshold=0.2 
         )
     )
     @transport.event_handler("on_client_connected")
