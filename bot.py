@@ -317,14 +317,11 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Client connected: {client}")
         # Kick off the conversation.
         now = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
-
-        # Inject date/time into system instruction instead of conversation history
-        # This is more natural for Gemini and reduces "reasoning confusion" latency
-        new_instruction = f"Current Date and Time: {now}\n\n{BASE_SYSTEM_PROMPT}"
-        await llm.update_settings(GeminiLiveLLMService.Settings(system_instruction=new_instruction))
-
+        
+        # Inject date/time directly into the initial developer instruction.
+        # This avoids the overhead/risk of calling update_settings during handshake.
         context.add_message(
-            {"role": "developer", "content": "Simply say: 'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"}
+            {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. Simply say: 'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"}
         )
         await task.queue_frames([LLMRunFrame()])
 
