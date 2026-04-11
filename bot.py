@@ -215,6 +215,19 @@ async def websocket_endpoint(websocket: WebSocket):
         tools=tools,
     )
 
+    # State for tracking speech
+    bot_is_speaking = False
+
+    @transport.event_handler("on_bot_started_speaking")
+    async def on_bot_started_speaking(transport):
+        nonlocal bot_is_speaking
+        bot_is_speaking = True
+
+    @transport.event_handler("on_bot_stopped_speaking")
+    async def on_bot_stopped_speaking(transport):
+        nonlocal bot_is_speaking
+        bot_is_speaking = False
+
     # Define tool handlers
     async def graceful_shutdown():
         # Wait a moment for any pending audio to at least start playing
@@ -223,7 +236,7 @@ async def websocket_endpoint(websocket: WebSocket):
         # If the bot is still speaking, wait for it to finish
         max_wait = 10.0 # Safety timeout
         wait_start = asyncio.get_event_loop().time()
-        while transport.is_speaking() and (asyncio.get_event_loop().time() - wait_start) < max_wait:
+        while bot_is_speaking and (asyncio.get_event_loop().time() - wait_start) < max_wait:
             await asyncio.sleep(0.1)
             
         # Small extra buffer for Twilio's network jitter
