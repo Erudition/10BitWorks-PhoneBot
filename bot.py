@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, EndTaskFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, EndTaskFrame, CancelTaskFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -131,13 +131,15 @@ async def websocket_endpoint(websocket: WebSocket):
     # Use Pipecat utility to parse the initial Twilio handshake
     transport_type, call_data = await parse_telephony_websocket(websocket)
     logger.info(f"Accepted {transport_type} call: {call_data}")
-
     # Initialize Twilio transport with specific call metadata
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
         call_sid=call_data["call_id"],
         account_sid=os.getenv("TWILIO_ACCOUNT_SID"),
-        auth_token=os.getenv("TWILIO_AUTH_TOKEN")
+        auth_token=os.getenv("TWILIO_AUTH_TOKEN"),
+        params=TwilioFrameSerializer.InputParams(
+            auto_hang_up=False
+        )
     )
 
     transport = FastAPIWebsocketTransport(
@@ -242,7 +244,7 @@ async def websocket_endpoint(websocket: WebSocket):
         
         await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
         # End the pipeline to allow the /post_bot fallback to take over
-        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+        await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def lookup_and_transfer(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
@@ -345,4 +347,3 @@ if __name__ == "__main__":
     import uvicorn
     # Local dev server
     uvicorn.run(app, host="0.0.0.0", port=8000)
-.0.0", port=8000)
