@@ -98,6 +98,11 @@ async def post_bot(request: Request):
     form_data = await request.form()
     call_sid = form_data.get("CallSid")
     
+    if call_sid in pending_hangups:
+        logger.info(f"Executing hangup for {call_sid}")
+        pending_hangups.remove(call_sid)
+        return Response(content='<Response><Hangup/></Response>', media_type="application/xml")
+    
     # Check if a transfer was requested by the bot
     target_number = pending_transfers.pop(call_sid, None)
     
@@ -210,10 +215,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Define tool handlers
     async def hang_up(params: FunctionCallParams):
-        logger.info("Bot is ending the call via end_call tool")
+        call_sid = call_data["call_id"]
+        logger.info(f"Bot is ending the call {call_sid} via end_call tool")
+        
+        # Register the hangup intent so the fallback returns <Hangup/> instead of returning to Studio
+        pending_hangups.add(call_sid)
+        
         await params.result_callback({"status": "hanging_up"})
-        # Gemini Live requires EndTaskFrame UPSTREAM for graceful pipeline termination
-        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+        # Use CancelTaskFrame for immediate pipeline exit
+        await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def notify_slack(params: FunctionCallParams):
         question = params.arguments.get("question")
