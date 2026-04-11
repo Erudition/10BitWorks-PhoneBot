@@ -221,7 +221,7 @@ async def websocket_endpoint(websocket: WebSocket):
     speech_tracker = SpeechTracker()
 
     async def wait_and_terminate():
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.5)
         max_wait = 15.0
         start_time = asyncio.get_event_loop().time()
         
@@ -229,8 +229,8 @@ async def websocket_endpoint(websocket: WebSocket):
         while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
             
-        logger.info("Bot finished speaking internally. Waiting 2s for audio tail to flush...")
-        await asyncio.sleep(2.0)
+        logger.info("Bot finished speaking internally. Waiting 0.5s for audio tail to flush...")
+        await asyncio.sleep(0.5)
         
         logger.info("Audio tail flushed. Terminating pipeline.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
