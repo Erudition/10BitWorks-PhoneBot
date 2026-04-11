@@ -308,8 +308,8 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_sample_rate=8000,
             enable_metrics=True,
             enable_usage_metrics=True,
-            # Send 200ms of silence before bot speech to "warm up" Twilio WebSocket
-            prefatory_silence_threshold=0.2 
+            # Send 400ms of silence before bot speech to "warm up" Twilio WebSocket
+            prefatory_silence_threshold=0.4 
         )
     )
     @transport.event_handler("on_client_connected")
