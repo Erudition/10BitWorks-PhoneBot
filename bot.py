@@ -132,6 +132,9 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Twilio WebSocket connection accepted")
 
+    # State for tracking speech (moved to top of scope)
+    bot_is_speaking = False
+
     # Use Pipecat utility to parse the initial Twilio handshake
     transport_type, call_data = await parse_telephony_websocket(websocket)
     logger.info(f"Accepted {transport_type} call: {call_data}")
@@ -215,9 +218,7 @@ async def websocket_endpoint(websocket: WebSocket):
         tools=tools,
     )
 
-    # State for tracking speech
-    bot_is_speaking = False
-
+    # Event handlers for speech tracking
     @transport.event_handler("on_bot_started_speaking")
     async def on_bot_started_speaking(transport):
         nonlocal bot_is_speaking
@@ -228,7 +229,7 @@ async def websocket_endpoint(websocket: WebSocket):
         nonlocal bot_is_speaking
         bot_is_speaking = False
 
-    # Define tool handlers
+    # Define tool handlers (now safely below transport/llm initialization)
     async def graceful_shutdown():
         # Wait a moment for any pending audio to at least start playing
         await asyncio.sleep(0.5)
