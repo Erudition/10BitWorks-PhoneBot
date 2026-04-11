@@ -184,12 +184,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 required=["phone_number"]
             ),
             FunctionSchema(
-                name="transfer_to_contact",
-                description="Look up a contact name in the CiviCRM database and transfer the call to them. Use this only when an exact name is provided by the caller.",
+                name="lookup_contact",
+                description="Look up a contact name in the CiviCRM database to get their phone number. This does NOT transfer the call. You must use transfer_call with the resulting phone number to actually transfer.",
                 properties={
                     "contact_name": {
                         "type": "string",
-                        "description": "The full name of the contact as requested by the caller (e.g. Bernard Conley)."
+                        "description": "The full name of the contact to look up (e.g. Bernard Conley)."
                     }
                 },
                 required=["contact_name"]
@@ -246,24 +246,21 @@ async def websocket_endpoint(websocket: WebSocket):
         # End the pipeline to allow the /post_bot fallback to take over
         await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
-    async def lookup_and_transfer(params: FunctionCallParams):
+    async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
         logger.info(f"Bot requesting CiviCRM lookup for: {contact_name}")
         
         try:
             # Wrap lookup in a timeout to prevent hanging the bot process
-            contacts = await asyncio.wait_for(civicrm_lookup.lookup_contact_by_name(contact_name), timeout=10.0)
+            contacts = await asyncio.wait_for(civicrm_lookup.lookup_contact_by_name(contact_name), timeout=4.5)
             
             # Success check: unique contact with unique phone
             if len(contacts) == 1 and len(contacts[0]["phones"]) == 1:
                 contact = contacts[0]
                 phone_number = contact["phones"][0]["number"]
-                call_sid = call_data["call_id"]
                 
-                logger.info(f"Unique match found for {contact_name}: {phone_number}. Initiating transfer.")
-                pending_transfers[call_sid] = phone_number
-                await params.result_callback({"status": "success", "message": f"Transferring to {contact_name}..."})
-                await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+                logger.info(f"Unique match found for {contact_name}: {phone_number}. Returning number to Gemini.")
+                await params.result_callback({"status": "success", "phone_number": phone_number, "message": f"Found {contact_name} with number {phone_number}. You can now ask the user if they want to transfer, and then use transfer_call."})
                 return
 
             # Disambiguation or error
@@ -280,7 +277,7 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("end_call", hang_up, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("report_missing_knowledge", notify_slack, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("transfer_call", start_transfer, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("transfer_to_contact", lookup_and_transfer, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
 
     # Task to warn the bot when 1 minute remains (10-minute limit)
     async def session_warning_task(interval=540):
