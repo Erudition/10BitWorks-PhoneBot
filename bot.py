@@ -132,9 +132,6 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Twilio WebSocket connection accepted")
 
-    # State for tracking speech (moved to top of scope)
-    bot_is_speaking = False
-
     # Use Pipecat utility to parse the initial Twilio handshake
     transport_type, call_data = await parse_telephony_websocket(websocket)
     logger.info(f"Accepted {transport_type} call: {call_data}")
@@ -218,38 +215,14 @@ async def websocket_endpoint(websocket: WebSocket):
         tools=tools,
     )
 
-    # Event handlers for speech tracking
-    @transport.event_handler("on_bot_started_speaking")
-    async def on_bot_started_speaking(transport):
-        nonlocal bot_is_speaking
-        bot_is_speaking = True
-
-    @transport.event_handler("on_bot_stopped_speaking")
-    async def on_bot_stopped_speaking(transport):
-        nonlocal bot_is_speaking
-        bot_is_speaking = False
-
-    # Define tool handlers (now safely below transport/llm initialization)
-    async def graceful_shutdown():
-        # Wait a moment for any pending audio to at least start playing
-        await asyncio.sleep(0.5)
-        
-        # If the bot is still speaking, wait for it to finish
-        max_wait = 10.0 # Safety timeout
-        wait_start = asyncio.get_event_loop().time()
-        while bot_is_speaking and (asyncio.get_event_loop().time() - wait_start) < max_wait:
-            await asyncio.sleep(0.1)
-            
-        # Small extra buffer for Twilio's network jitter
-        await asyncio.sleep(0.2)
-        await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
-
+    # Define tool handlers
     async def hang_up(params: FunctionCallParams):
         call_sid = call_data["call_id"]
         logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
         await params.result_callback({"status": "hanging_up"})
-        asyncio.create_task(graceful_shutdown())
+        # Use EndTaskFrame to allow Pipecat's native graceful shutdown logic to take over
+        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
 
     async def notify_slack(params: FunctionCallParams):
         observation = params.arguments.get("observation")
@@ -276,7 +249,8 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
         pending_transfers[call_sid] = phone_number
         await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
-        asyncio.create_task(graceful_shutdown())
+        # Use EndTaskFrame to ensure the bot finishes its sentence before the redirect happens
+        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
@@ -333,16 +307,15 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_sample_rate=8000,
             enable_metrics=True,
             enable_usage_metrics=True,
+            # Ensure the audio buffer flushes for 0.8s before the connection closes on EndFrame
+            audio_out_end_silence_secs=0.8
         )
     )
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info(f"Client connected: {client}")
-        # Kick off the conversation.
         now = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
-        
-        # Inject date/time directly into the initial developer instruction.
-        # This avoids the overhead/risk of calling update_settings during handshake.
         context.add_message(
             {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. Simply say: 'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"}
         )
