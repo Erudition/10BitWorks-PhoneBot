@@ -231,15 +231,22 @@ async def websocket_endpoint(websocket: WebSocket):
 
     # Define tool handlers
     async def wait_and_terminate():
-        # Give audio buffer a moment to populate
-        await asyncio.sleep(0.5)
-        # Wait for the bot to finish its current sentence
+        # 1. Give the bot a moment to actually start speaking its closing sentence
+        await asyncio.sleep(1.0)
+        
+        # 2. Wait for the internal "speaking" state to clear
         max_wait = 15.0
         start_time = asyncio.get_event_loop().time()
         while bot_is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
-        # Small tail buffer
-        await asyncio.sleep(0.5)
+            
+        # 3. CRITICAL: The "Audio Tail". Even after internal speech stops, 
+        # we must wait for the audio buffer to actually finish transmitting to Twilio.
+        # 2 seconds is a safe buffer for most network jitter.
+        logger.info("Bot finished speaking internally. Waiting 2s for audio tail to flush...")
+        await asyncio.sleep(2.0)
+        
+        logger.info("Audio tail flushed. Terminating pipeline.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def hang_up(params: FunctionCallParams):
