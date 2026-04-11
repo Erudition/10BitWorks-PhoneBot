@@ -132,6 +132,9 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Twilio WebSocket connection accepted")
 
+    # State for tracking speech
+    bot_is_speaking = False
+
     # Use Pipecat utility to parse the initial Twilio handshake
     transport_type, call_data = await parse_telephony_websocket(websocket)
     logger.info(f"Accepted {transport_type} call: {call_data}")
@@ -215,14 +218,36 @@ async def websocket_endpoint(websocket: WebSocket):
         tools=tools,
     )
 
+    # Event handlers for speech tracking
+    @transport.event_handler("on_bot_started_speaking")
+    async def on_bot_started_speaking(transport):
+        nonlocal bot_is_speaking
+        bot_is_speaking = True
+
+    @transport.event_handler("on_bot_stopped_speaking")
+    async def on_bot_stopped_speaking(transport):
+        nonlocal bot_is_speaking
+        bot_is_speaking = False
+
     # Define tool handlers
+    async def wait_and_terminate():
+        # Give audio buffer a moment to populate
+        await asyncio.sleep(0.5)
+        # Wait for the bot to finish its current sentence
+        max_wait = 15.0
+        start_time = asyncio.get_event_loop().time()
+        while bot_is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
+            await asyncio.sleep(0.1)
+        # Small tail buffer
+        await asyncio.sleep(0.5)
+        await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
+
     async def hang_up(params: FunctionCallParams):
         call_sid = call_data["call_id"]
         logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
         await params.result_callback({"status": "hanging_up"})
-        # Use EndTaskFrame to allow Pipecat's native graceful shutdown logic to take over
-        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+        asyncio.create_task(wait_and_terminate())
 
     async def notify_slack(params: FunctionCallParams):
         observation = params.arguments.get("observation")
@@ -249,8 +274,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
         pending_transfers[call_sid] = phone_number
         await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
-        # Use EndTaskFrame to ensure the bot finishes its sentence before the redirect happens
-        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+        asyncio.create_task(wait_and_terminate())
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
@@ -307,8 +331,6 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_sample_rate=8000,
             enable_metrics=True,
             enable_usage_metrics=True,
-            # Ensure the audio buffer flushes for 0.8s before the connection closes on EndFrame
-            audio_out_end_silence_secs=0.8
         )
     )
 
