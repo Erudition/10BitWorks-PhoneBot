@@ -16,14 +16,15 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketTransport, FastAPIWebsocketParams
 from pipecat.serializers.twilio import TwilioFrameSerializer
 
-import sync_knowledgebase
-
 load_dotenv(override=True)
+
+import sync_knowledgebase
 
 app = FastAPI()
 
@@ -40,6 +41,10 @@ if not GOOGLE_API_KEY:
 STUDIO_WEBHOOK_URL = os.getenv("STUDIO_WEBHOOK_URL")
 if not STUDIO_WEBHOOK_URL:
     logger.warning("STUDIO_WEBHOOK_URL not found in environment. Call continuation will be disabled.")
+
+# Global state for call transfers
+# In production, use a TTL cache or Redis instead of a simple dict
+pending_transfers = {}
 
 # Sync knowledgebase on startup
 logger.info("Syncing knowledgebase from Zammad...")
@@ -75,23 +80,46 @@ async def twiml(request: Request):
     host = request.url.netloc
     
     # Construct the redirect URL for returning to Studio Flow
-    return_url = ""
-    if STUDIO_WEBHOOK_URL:
-        # Append FlowEvent=return if not already present
-        sep = "&" if "?" in STUDIO_WEBHOOK_URL else "?"
-        return_url = f"{STUDIO_WEBHOOK_URL}{sep}FlowEvent=return"
-    
+    # We point to our /post_bot endpoint instead of directly back to Studio
+    # so we can intercept any requested transfers.
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Connect>
             <Stream url="wss://{host}/ws" />
-        </Connect>"""
-    
-    if return_url:
-        twiml_response += f'\n        <Redirect method="POST">{return_url}</Redirect>'
-    
-    twiml_response += "\n    </Response>"
+        </Connect>
+        <Redirect method="POST">https://{host}/post_bot</Redirect>
+    </Response>"""
     return Response(content=twiml_response, media_type="application/xml")
+
+@app.post("/post_bot")
+async def post_bot(request: Request):
+    form_data = await request.form()
+    call_sid = form_data.get("CallSid")
+    
+    # Check if a transfer was requested by the bot
+    target_number = pending_transfers.pop(call_sid, None)
+    
+    if target_number:
+        logger.info(f"Executing transfer for {call_sid} to {target_number}")
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+        <Response>
+            <Dial>{target_number}</Dial>
+        </Response>"""
+        return Response(content=twiml, media_type="application/xml")
+    
+    # Otherwise, return back to the Studio Flow if configured
+    if STUDIO_WEBHOOK_URL:
+        sep = "&" if "?" in STUDIO_WEBHOOK_URL else "?"
+        studio_return_url = f"{STUDIO_WEBHOOK_URL}{sep}FlowEvent=return"
+        logger.info(f"Returning call {call_sid} to Studio Flow")
+        twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
+        <Response>
+            <Redirect method="POST">{studio_return_url}</Redirect>
+        </Response>"""
+        return Response(content=twiml, media_type="application/xml")
+    
+    # Fallback to hangup if no Studio URL is set
+    return Response(content='<Response><Hangup/></Response>', media_type="application/xml")
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -139,6 +167,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                 },
                 required=["question"]
+            ),
+            FunctionSchema(
+                name="transfer_call",
+                description="Transfer the current call to another phone number. Use this when the user asks to speak to a person or a specific volunteer.",
+                properties={
+                    "phone_number": {
+                        "type": "string",
+                        "description": "The E.164 formatted phone number to transfer to (e.g. +12105551212)."
+                    }
+                },
+                required=["phone_number"]
             )
         ],
         custom_tools={AdapterType.GEMINI: [{"google_search": {}}]},
@@ -155,12 +194,12 @@ async def websocket_endpoint(websocket: WebSocket):
     )
 
     # Define tool handlers
-    async def hang_up(llm, args):
+    async def hang_up(params: FunctionCallParams):
         logger.info("Bot is ending the call via end_call tool")
         await task.queue_frame(EndFrame())
 
-    async def notify_slack(llm, args):
-        question = args.get("question")
+    async def notify_slack(params: FunctionCallParams):
+        question = params.arguments.get("question")
         webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         if not webhook_url:
             logger.error("SLACK_WEBHOOK_URL not found in environment")
@@ -175,8 +214,20 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             logger.error(f"Failed to notify Slack: {e}")
 
+    async def start_transfer(params: FunctionCallParams):
+        phone_number = params.arguments.get("phone_number")
+        call_sid = call_data["call_id"]
+        logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
+        
+        # Register the transfer intent
+        pending_transfers[call_sid] = phone_number
+        
+        # End the pipeline to allow the /post_bot fallback to take over
+        await task.queue_frame(EndFrame())
+
     llm.register_function("end_call", hang_up)
     llm.register_function("report_missing_knowledge", notify_slack)
+    llm.register_function("transfer_call", start_transfer)
 
     # Task to warn the bot when 1 minute remains (10-minute limit)
     async def session_warning_task(interval=540):
