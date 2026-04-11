@@ -168,14 +168,14 @@ async def websocket_endpoint(websocket: WebSocket):
             ),
             FunctionSchema(
                 name="report_missing_knowledge",
-                description="Writes to the log that a question was asked that is not in the knowledge base. Use this silently when you cannot answer a question accurately.",
+                description="Report a gap in the knowledge base. Use this silently when you cannot find a specific answer or when the existing docs are insufficient. Describe who is calling, what they specifically want to know, and why the current documentation didn't help.",
                 properties={
-                    "question": {
+                    "observation": {
                         "type": "string",
-                        "description": "The specific question asked by the user."
+                        "description": "Detailed description of the knowledge gap, including caller context and why the documentation was insufficient."
                     }
                 },
-                required=["question"]
+                required=["observation"]
             ),
             FunctionSchema(
                 name="transfer_call",
@@ -223,22 +223,22 @@ async def websocket_endpoint(websocket: WebSocket):
         await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
 
     async def notify_slack(params: FunctionCallParams):
-        question = params.arguments.get("question")
-        async def send_to_slack(q):
+        observation = params.arguments.get("observation")
+        async def send_to_slack(obs):
             webhook_url = os.getenv("SLACK_WEBHOOK_URL")
             if not webhook_url:
                 logger.error("SLACK_WEBHOOK_URL not found in environment")
                 return
-            payload = {"message": f"Receptionist fielded a question that is not answered in the current knowledge base: {q}"}
+            payload = {"message": f"Knowledge Base Gap Reported:\n{obs}"}
             try:
                 async with httpx.AsyncClient(timeout=4.5) as client:
                     response = await client.post(webhook_url, json=payload)
                     response.raise_for_status()
-                logger.info(f"Notified Slack about missing knowledge: {q}")
+                logger.info(f"Notified Slack about missing knowledge: {obs[:50]}...")
             except Exception as e:
                 logger.error(f"Failed to notify Slack: {e}")
-        asyncio.create_task(send_to_slack(question))
-        await params.result_callback({"status": "success", "message": "Feedback submitted."})
+        asyncio.create_task(send_to_slack(observation))
+        await params.result_callback({"status": "success", "message": "Observation logged for review. Continue the conversation naturally."})
 
     async def start_transfer(params: FunctionCallParams):
         phone_number = params.arguments.get("phone_number")
