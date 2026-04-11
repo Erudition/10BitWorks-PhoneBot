@@ -11,13 +11,13 @@ from dotenv import load_dotenv
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.runner.utils import parse_telephony_websocket
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
@@ -33,8 +33,6 @@ app = FastAPI()
 
 # Configuration
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-# Note: Using the model name without the "models/" prefix or v1alpha features
-# was required to resolve the 1011 internal error.
 MODEL_NAME = "gemini-3.1-flash-live-preview"
 
 if not GOOGLE_API_KEY:
@@ -64,7 +62,6 @@ try:
     with open(SYSTEM_PROMPT_PATH, "r") as f:
         SYSTEM_PROMPT = f.read()
     
-    # Append knowledgebase files
     if KNOWLEDGEBASE_DIR.exists():
         kb_content = "\n\n# KNOWLEDGE BASE\n"
         for md_file in KNOWLEDGEBASE_DIR.glob("**/*.md"):
@@ -81,8 +78,6 @@ except Exception as e:
 @app.get("/twiml")
 async def twiml(request: Request):
     host = request.url.netloc
-    
-    # Construct the redirect URL for returning to Studio Flow
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Connect>
@@ -102,9 +97,7 @@ async def post_bot(request: Request):
         pending_hangups.remove(call_sid)
         return Response(content='<Response><Hangup/></Response>', media_type="application/xml")
     
-    # Check if a transfer was requested by the bot
     target_number = pending_transfers.pop(call_sid, None)
-    
     if target_number:
         logger.info(f"Executing transfer for {call_sid} to {target_number}")
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -113,7 +106,6 @@ async def post_bot(request: Request):
         </Response>"""
         return Response(content=twiml, media_type="application/xml")
     
-    # Otherwise, return back to the Studio Flow if configured
     if STUDIO_WEBHOOK_URL:
         sep = "&" if "?" in STUDIO_WEBHOOK_URL else "?"
         studio_return_url = f"{STUDIO_WEBHOOK_URL}{sep}FlowEvent=return"
@@ -124,22 +116,17 @@ async def post_bot(request: Request):
         </Response>"""
         return Response(content=twiml, media_type="application/xml")
     
-    # Fallback to hangup if no Studio URL is set
     return Response(content='<Response><Hangup/></Response>', media_type="application/xml")
+
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Twilio WebSocket connection accepted")
 
-    # State for tracking speech
-    bot_is_speaking = False
-
-    # Use Pipecat utility to parse the initial Twilio handshake
     transport_type, call_data = await parse_telephony_websocket(websocket)
     logger.info(f"Accepted {transport_type} call: {call_data}")
 
-    # Initialize Twilio transport with specific call metadata
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
         call_sid=call_data["call_id"],
@@ -157,13 +144,10 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_enabled=True,
             add_wav_header=False,
             serializer=serializer,
-            # Strictly frame and pace the audio to 20ms chunks (320 bytes for 8kHz PCM16)
-            # This prevents buffer bloat and eliminates Twilio "clicks" naturally
             fixed_audio_packet_size=320
         )
     )
 
-    # Initialize Gemini Live LLM Service (Native S2S)
     tools = ToolsSchema(
         standard_tools=[
             FunctionSchema(
@@ -219,31 +203,31 @@ async def websocket_endpoint(websocket: WebSocket):
         tools=tools,
     )
 
-    # Event handlers for speech tracking
-    @transport.event_handler("on_bot_started_speaking")
-    async def on_bot_started_speaking(transport):
-        nonlocal bot_is_speaking
-        bot_is_speaking = True
+    # State for tracking speech via a FrameProcessor
+    class SpeechTracker(FrameProcessor):
+        def __init__(self):
+            super().__init__()
+            self.is_speaking = False
 
-    @transport.event_handler("on_bot_stopped_speaking")
-    async def on_bot_stopped_speaking(transport):
-        nonlocal bot_is_speaking
-        bot_is_speaking = False
+        async def process_frame(self, frame: Frame, direction: FrameDirection):
+            # Intercept frames pushed UPSTREAM by the output transport
+            if isinstance(frame, BotStartedSpeakingFrame):
+                self.is_speaking = True
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                self.is_speaking = False
+            await self.push_frame(frame, direction)
 
-    # Define tool handlers
+    speech_tracker = SpeechTracker()
+
     async def wait_and_terminate():
-        # 1. Give the bot a moment to actually start speaking its closing sentence
         await asyncio.sleep(1.0)
-        
-        # 2. Wait for the internal "speaking" state to clear
         max_wait = 15.0
         start_time = asyncio.get_event_loop().time()
-        while bot_is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
+        
+        # Poll the speech_tracker state
+        while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
             
-        # 3. CRITICAL: The "Audio Tail". Even after internal speech stops, 
-        # we must wait for the audio buffer to actually finish transmitting to Twilio.
-        # 2 seconds is a safe buffer for most network jitter.
         logger.info("Bot finished speaking internally. Waiting 2s for audio tail to flush...")
         await asyncio.sleep(2.0)
         
@@ -307,7 +291,6 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("transfer_call", start_transfer, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
 
-    # Task to warn the bot when 1 minute remains
     async def session_warning_task(interval=540):
         await asyncio.sleep(interval)
         try:
@@ -328,6 +311,7 @@ async def websocket_endpoint(websocket: WebSocket):
         transport.input(),
         user_aggregator,
         llm,
+        speech_tracker,
         transport.output(),
         assistant_aggregator,
     ])
