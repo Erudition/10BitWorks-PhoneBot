@@ -17,6 +17,7 @@ from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
+from pipecat.processors.audio.fixed_size_scheduler import FixedSizeScheduler
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import FunctionCallParams
 from pipecat.runner.utils import parse_telephony_websocket
@@ -153,8 +154,7 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_in_enabled=True,
             audio_out_enabled=True,
             add_wav_header=False,
-            serializer=serializer,
-            audio_out_is_resettable=True
+            serializer=serializer
         )
     )
 
@@ -296,11 +296,11 @@ async def websocket_endpoint(websocket: WebSocket):
         transport.input(),
         user_aggregator,
         llm,
+        FixedSizeScheduler(chunk_size=160), # 20ms of audio at 8kHz (160 samples)
         transport.output(),
         assistant_aggregator,
     ])
 
-    # Tweak the task to send prefatory silence (warm-up audio) to Twilio
     task = PipelineTask(
         pipeline,
         params=PipelineParams(
@@ -308,8 +308,6 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_sample_rate=8000,
             enable_metrics=True,
             enable_usage_metrics=True,
-            # Send 400ms of silence before bot speech to "warm up" Twilio WebSocket
-            prefatory_silence_threshold=0.4 
         )
     )
     @transport.event_handler("on_client_connected")
