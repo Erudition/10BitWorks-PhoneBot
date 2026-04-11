@@ -221,10 +221,9 @@ async def websocket_endpoint(websocket: WebSocket):
         await asyncio.sleep(0.5)
         
         # If the bot is still speaking, wait for it to finish
-        # We check transport state directly
         max_wait = 10.0 # Safety timeout
         wait_start = asyncio.get_event_loop().time()
-        while transport._output._bot_speaking and (asyncio.get_event_loop().time() - wait_start) < max_wait:
+        while transport.is_speaking() and (asyncio.get_event_loop().time() - wait_start) < max_wait:
             await asyncio.sleep(0.1)
             
         # Small extra buffer for Twilio's network jitter
