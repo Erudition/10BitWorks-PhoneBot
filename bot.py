@@ -157,8 +157,9 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_enabled=True,
             add_wav_header=False,
             serializer=serializer,
-            # Continuously send silence when bot is not speaking to keep Twilio sync'd
-            audio_out_can_send_silence=True
+            # Strictly frame and pace the audio to 20ms chunks (320 bytes for 8kHz PCM16)
+            # This prevents buffer bloat and eliminates Twilio "clicks" naturally
+            fixed_audio_packet_size=320
         )
     )
 
