@@ -208,6 +208,7 @@ async def websocket_endpoint(websocket: WebSocket):
     # Define tool handlers
     async def hang_up(params: FunctionCallParams):
         logger.info("Bot is ending the call via end_call tool")
+        await params.result_callback({"status": "hanging_up"})
         await task.queue_frame(EndFrame())
 
     async def notify_slack(params: FunctionCallParams):
@@ -215,16 +216,19 @@ async def websocket_endpoint(websocket: WebSocket):
         webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         if not webhook_url:
             logger.error("SLACK_WEBHOOK_URL not found in environment")
+            await params.result_callback({"status": "error", "message": "Slack webhook not configured"})
             return
 
-        payload = {"message": f"Bot encountered an unknown question: {question}"}
+        payload = {"message": f"Receptionist fielded a question that is not answered in the current knowledge base: {question}"}
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.post(webhook_url, json=payload)
                 response.raise_for_status()
             logger.info(f"Notified Slack about missing knowledge: {question}")
+            await params.result_callback({"status": "success", "message": "Logged for further review."})
         except Exception as e:
             logger.error(f"Failed to notify Slack: {e}")
+            await params.result_callback({"status": "error", "message": str(e)})
 
     async def start_transfer(params: FunctionCallParams):
         phone_number = params.arguments.get("phone_number")
@@ -234,6 +238,7 @@ async def websocket_endpoint(websocket: WebSocket):
         # Register the transfer intent
         pending_transfers[call_sid] = phone_number
         
+        await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
         # End the pipeline to allow the /post_bot fallback to take over
         await task.queue_frame(EndFrame())
 
