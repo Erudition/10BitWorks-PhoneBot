@@ -184,7 +184,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 properties={
                     "contact_name": {
                         "type": "string",
-                        "description": "The full name of the contact to look up (e.g. Bernard Conley)."
+                        "description": "The full name of the contact to look up (e.g. Greg Thibodeaux)."
                     }
                 },
                 required=["contact_name"]
