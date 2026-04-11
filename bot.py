@@ -216,14 +216,27 @@ async def websocket_endpoint(websocket: WebSocket):
     )
 
     # Define tool handlers
+    async def graceful_shutdown():
+        # Wait a moment for any pending audio to at least start playing
+        await asyncio.sleep(0.5)
+        
+        # If the bot is still speaking, wait for it to finish
+        # We check transport state directly
+        max_wait = 10.0 # Safety timeout
+        wait_start = asyncio.get_event_loop().time()
+        while transport._output._bot_speaking and (asyncio.get_event_loop().time() - wait_start) < max_wait:
+            await asyncio.sleep(0.1)
+            
+        # Small extra buffer for Twilio's network jitter
+        await asyncio.sleep(0.2)
+        await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
+
     async def hang_up(params: FunctionCallParams):
         call_sid = call_data["call_id"]
         logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
         await params.result_callback({"status": "hanging_up"})
-        # Fast-track shutdown to bypass the 30s Gemini Live EndFrame deferral bug
-        await asyncio.sleep(0.5)
-        await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
+        asyncio.create_task(graceful_shutdown())
 
     async def notify_slack(params: FunctionCallParams):
         observation = params.arguments.get("observation")
@@ -250,9 +263,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
         pending_transfers[call_sid] = phone_number
         await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
-        # Fast-track shutdown to bypass the 30s Gemini Live EndFrame deferral bug
-        await asyncio.sleep(0.5)
-        await params.llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
+        asyncio.create_task(graceful_shutdown())
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
