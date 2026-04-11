@@ -275,10 +275,10 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.error(f"CiviCRM lookup failed: {e}")
             await params.result_callback({"status": "error", "message": str(e)})
 
-    llm.register_function("end_call", hang_up)
-    llm.register_function("report_missing_knowledge", notify_slack)
-    llm.register_function("transfer_call", start_transfer)
-    llm.register_function("transfer_to_contact", lookup_and_transfer)
+    llm.register_function("end_call", hang_up, cancel_on_interruption=False)
+    llm.register_function("report_missing_knowledge", notify_slack, cancel_on_interruption=False)
+    llm.register_function("transfer_call", start_transfer, cancel_on_interruption=False)
+    llm.register_function("transfer_to_contact", lookup_and_transfer, cancel_on_interruption=False)
 
     # Task to warn the bot when 1 minute remains (10-minute limit)
     async def session_warning_task(interval=540):
@@ -336,7 +336,10 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error(f"Error running pipeline: {e}")
     finally:
-        await websocket.close()
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
 
 if __name__ == "__main__":
     import uvicorn
