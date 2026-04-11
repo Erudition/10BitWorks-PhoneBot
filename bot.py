@@ -25,6 +25,7 @@ from pipecat.serializers.twilio import TwilioFrameSerializer
 load_dotenv(override=True)
 
 import sync_knowledgebase
+import civicrm_lookup
 
 app = FastAPI()
 
@@ -178,6 +179,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                 },
                 required=["phone_number"]
+            ),
+            FunctionSchema(
+                name="transfer_to_contact",
+                description="Look up a contact name in the CiviCRM database and transfer the call to them. Use this only when an exact name is provided by the caller.",
+                properties={
+                    "contact_name": {
+                        "type": "string",
+                        "description": "The full name of the contact as requested by the caller (e.g. Bernard Conley)."
+                    }
+                },
+                required=["contact_name"]
             )
         ],
         custom_tools={AdapterType.GEMINI: [{"google_search": {}}]},
@@ -225,9 +237,33 @@ async def websocket_endpoint(websocket: WebSocket):
         # End the pipeline to allow the /post_bot fallback to take over
         await task.queue_frame(EndFrame())
 
+    async def lookup_and_transfer(params: FunctionCallParams):
+        contact_name = params.arguments.get("contact_name")
+        logger.info(f"Bot requesting CiviCRM lookup for: {contact_name}")
+        
+        contacts = await civicrm_lookup.lookup_contact_by_name(contact_name)
+        
+        # Success check: unique contact with unique phone
+        if len(contacts) == 1 and len(contacts[0]["phones"]) == 1:
+            contact = contacts[0]
+            phone_number = contact["phones"][0]["number"]
+            call_sid = call_data["call_id"]
+            
+            logger.info(f"Unique match found for {contact_name}: {phone_number}. Initiating transfer.")
+            pending_transfers[call_sid] = phone_number
+            await task.queue_frame(EndFrame())
+            await params.result_callback({"status": "success", "message": f"Transferring to {contact_name}..."})
+            return
+
+        # Disambiguation or error
+        error_msg = civicrm_lookup.format_disambiguation_message(contacts)
+        logger.info(f"CiviCRM lookup for {contact_name} requires disambiguation: {error_msg}")
+        await params.result_callback({"status": "error", "message": error_msg})
+
     llm.register_function("end_call", hang_up)
     llm.register_function("report_missing_knowledge", notify_slack)
     llm.register_function("transfer_call", start_transfer)
+    llm.register_function("transfer_to_contact", lookup_and_transfer)
 
     # Task to warn the bot when 1 minute remains (10-minute limit)
     async def session_warning_task(interval=540):
