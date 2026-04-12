@@ -490,6 +490,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 asyncio.create_task(civicrm_lookup.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}"))
         await task.cancel()
 
+    runner = PipelineRunner(handle_sigint=True)
     try:
         await runner.run(task)
     except Exception as e:
