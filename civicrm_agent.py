@@ -1,6 +1,7 @@
 import httpx
 import json
 import os
+import re
 from loguru import logger
 
 async def _call_api(entity: str, action: str, params: dict):
@@ -119,6 +120,11 @@ async def add_address(contact_id: int, street: str, city: str, zip_code: str, is
     return "Address added successfully." if not data.get("is_error") else f"Error: {data.get('error_message')}"
 
 async def add_phone(contact_id: int, phone: str, is_primary: bool = False):
+    # Validate that the phone number contains actual digits
+    if not any(char.isdigit() for char in phone):
+        logger.info(f"Skipping phone addition for contact {contact_id}: '{phone}' contains no digits.")
+        return "Skipped adding phone: no digits found."
+
     params = {
         "records": [{
             "contact_id": contact_id,
@@ -157,7 +163,7 @@ async def set_primary_record(entity: str, record_id: int):
 
 async def create_contact(first_name: str, last_name: str, phone_number: str):
     """
-    Creates a new Individual contact and associates the phone number.
+    Creates a new Individual contact and associates the phone number if valid.
     """
     params = {
         "records": [{
@@ -172,12 +178,16 @@ async def create_contact(first_name: str, last_name: str, phone_number: str):
     
     contact_id = data["values"][0]["id"]
     
-    # Add the phone number to the new contact
-    await add_phone(contact_id, phone_number, is_primary=True)
+    # Only attempt to add the phone number if it contains digits (e.g. not "Unknown Caller")
+    if any(char.isdigit() for char in phone_number):
+        await add_phone(contact_id, phone_number, is_primary=True)
+        msg = f"Contact record created for {first_name} {last_name} with phone {phone_number}."
+    else:
+        msg = f"Contact record created for {first_name} {last_name} (phone omitted as it was restricted/unknown)."
     
     return {
         "success": True, 
         "contact_id": contact_id, 
-        "message": f"Contact record created for {first_name} {last_name} with ID {contact_id}."
+        "message": msg
     }
 
