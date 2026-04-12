@@ -63,17 +63,25 @@ async def lookup_contact_by_name(full_name: str):
                     "phones": []
                 }
                 
-                for phone_rec in val.get("phones", []):
+                seen_numbers = set()
+                # Sort phones so primary comes first
+                sorted_phones = sorted(val.get("phones", []), key=lambda x: not x.get("is_primary", False))
+                
+                for phone_rec in sorted_phones:
                     # Sanitize phone number (strip non-digits, but keep + for E.164)
                     raw_phone = phone_rec.get("phone", "")
                     clean_phone = re.sub(r'[^\d+]', '', raw_phone)
                     
                     if clean_phone:
-                        contact["phones"].append({
-                            "number": clean_phone,
-                            "label": phone_rec.get("location_type_id:label", "Other"),
-                            "is_primary": phone_rec.get("is_primary", False)
-                        })
+                        # Normalize for deduplication (strip leading +1 or 1)
+                        dedup_phone = re.sub(r'^\+?1', '', clean_phone) if len(clean_phone) >= 10 else clean_phone
+                        if dedup_phone not in seen_numbers:
+                            seen_numbers.add(dedup_phone)
+                            contact["phones"].append({
+                                "number": clean_phone,
+                                "label": phone_rec.get("location_type_id:label", "Other"),
+                                "is_primary": phone_rec.get("is_primary", False)
+                            })
                 
                 contacts.append(contact)
             
