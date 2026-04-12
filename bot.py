@@ -459,7 +459,7 @@ async def websocket_endpoint(websocket: WebSocket):
         contact_info = await civicrm_lookup.lookup_contact_by_phone(caller_number)
         
         detail_block = "CURRENT CALLER INFO: Unknown Caller."
-        greeting = "'Thank you for calling 10BitWorks! Who am I speaking with today?'"
+        greeting = "'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"
         
         if contact_info:
             caller_contact_id = contact_info["contact_id"]
@@ -470,7 +470,7 @@ async def websocket_endpoint(websocket: WebSocket):
             contact_details = await civicrm_agent.list_contact_info(caller_contact_id)
             
             detail_block = f"CURRENT CALLER INFO: Recognized as {name} (ID: {caller_contact_id}).\n\n{membership}\n\n{contact_details}"
-            greeting = f"'Hi {name}! Thank you for calling 10BitWorks! How can I help you today?'"
+            greeting = f"'Hi {name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
             
         context.add_message(
             {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
