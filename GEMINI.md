@@ -16,8 +16,8 @@ This file documents critical architectural decisions, workarounds, and gotchas d
 *   **Timeouts**: Wrap all external network requests (like CiviCRM lookups) in an `asyncio.wait_for` timeout (e.g., 4.5 seconds). Pipecat enforces a strict 5.0-second timeout for tool execution, and catching it at 4.5s allows us to gracefully return an error to the LLM instead of crashing the pipeline. Also, pass `timeout_secs=5.0` to `llm.register_function`.
 
 ## 3. Twilio Audio Pacing and Stability
-*   **Strict 20ms Pacing**: Twilio Media Streams expect 8kHz, 16-bit mono audio (320 bytes = 20ms chunks). Use Pipecat's native `audio_out_10ms_chunks=2` setting in `FastAPIWebsocketParams`.
-*   **Avoid External Schedulers**: Do not use `FixedSizeScheduler` or `prefatory_silence_threshold`. They interfere with the native chunking and cause "clicking" or "speed-run" distorted audio.
+*   **Strict 20ms Pacing**: Twilio Media Streams expect 8kHz, 16-bit mono audio (320 bytes = 20ms chunks). Use Pipecat's **`fixed_audio_packet_size=320`** setting in `FastAPIWebsocketParams`. This ensures perfectly timed packets without the overhead of higher-level chunking.
+*   **Avoid Chunks and Schedulers**: Do **NOT** use `audio_out_10ms_chunks`, `FixedSizeScheduler`, or `prefatory_silence_threshold`. These can interfere with the native framing and cause "clicking" or "speed-run" distorted audio.
 *   **Avoid Infinite Silence**: Do NOT set `audio_out_can_send_silence=True`. While it keeps the stream synchronized, Pipecat will dump infinite silence into the buffer while the LLM is "thinking", causing massive (multi-second) delays before the bot's actual speech is heard.
 
 ## 4. Graceful Shutdown & The 30-Second Gemini Bug
