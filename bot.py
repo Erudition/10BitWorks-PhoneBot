@@ -307,7 +307,6 @@ async def websocket_endpoint(websocket: WebSocket):
             context.add_message(
                 {"role": "developer", "content": "SYSTEM WARNING: There are 3 minutes remaining in this call due to a technical limit. Please begin to wrap up the conversation."}
             )
-            await task.queue_frames([LLMRunFrame()])
 
             # 8 minute warning (+60 seconds)
             await asyncio.sleep(60)
@@ -315,7 +314,6 @@ async def websocket_endpoint(websocket: WebSocket):
             context.add_message(
                 {"role": "developer", "content": "SYSTEM WARNING: There are 2 minutes remaining. You must wrap up now."}
             )
-            await task.queue_frames([LLMRunFrame()])
 
             # 9 minute warning (+60 seconds)
             await asyncio.sleep(60)
@@ -323,6 +321,7 @@ async def websocket_endpoint(websocket: WebSocket):
             context.add_message(
                 {"role": "developer", "content": "CRITICAL SYSTEM WARNING: There is only 1 minute remaining. You MUST conclude the conversation and call the end_call tool IMMEDIATELY."}
             )
+            # We ONLY force an interruption for the absolute final warning
             await task.queue_frames([LLMRunFrame()])
             
         except asyncio.CancelledError:
