@@ -5,7 +5,9 @@ This file documents critical architectural decisions, workarounds, and gotchas d
 ## 1. Gemini 3.1 Live Integration Constraints
 *   **Model String**: The correct model string for Gemini 3.1 Live is `gemini-3.1-flash-live-preview`. Do **NOT** use the `models/` prefix. Using the prefix or incorrect strings will cause a `1011 Internal error` during connection.
 *   **API Versioning**: Do not force the `v1alpha` API version or use `enable_affective_dialog=True` in the `GeminiLiveLLMService.Settings`. These features are specific to Gemini 2.5 Native Audio models. Stick to the default `v1beta` (which Pipecat uses automatically when `http_options` is omitted).
-*   **Dynamic Prompting (Date/Time)**: Inject dynamic data (like the current time) into the initial **`developer`** role message using `context.add_message()`. Do **NOT** use `llm.update_settings()` during the `on_client_connected` event, as it triggers an internal session reset/reconnect that breaks the initial handshake and causes the bot to remain silent.
+*   **Dynamic Prompting (Date/Time)**: Inject dynamic data (like the current time) into the initial **`developer`** role message using `context.add_message()`. 
+    *   *Handshake Warning*: Do **NOT** use `llm.update_settings()` during the `on_client_connected` event; it triggers a session reset that causes the bot to remain silent.
+    *   *Role Mapping*: Note that Pipecat maps the `developer` role to the `user` role in the Gemini Live history. To prevent the model from thinking the *caller* is providing these instructions, always prefix the message text with `SYSTEM INFO:` or `INSTRUCTION:`.
 
 ## 2. Tool Calling with Gemini 3.1 Live
 *   **No Asynchronous Function Calling**: Gemini 3.1 Flash Live Preview does **not** currently support native asynchronous tool calling.
