@@ -3,15 +3,14 @@ import json
 import os
 from loguru import logger
 
-async def get_membership_info(contact_id: int):
-    """
-    Returns a summary of the contact's memberships.
-    """
+async def _call_api(entity: str, action: str, params: dict):
     url = os.getenv("CIVICRM_API_URL")
     if not url:
-        return "CiviCRM API not configured."
+        return {"is_error": True, "error_message": "CiviCRM API URL not configured"}
     
-    endpoint = url.rstrip("/") + "/Membership/get"
+    # Construct endpoint
+    endpoint = url.rstrip("/") + f"/{entity}/{action}"
+    
     api_key = os.getenv("CIVICRM_API_KEY")
     site_key = os.getenv("CIVICRM_SITE_KEY")
     
@@ -22,135 +21,134 @@ async def get_membership_info(contact_id: int):
         "Content-Type": "application/x-www-form-urlencoded"
     }
     
+    body = {
+        "params": json.dumps(params)
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(endpoint, headers=headers, data=body)
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        logger.error(f"CiviCRM API call failed ({entity}.{action}): {e}")
+        return {"is_error": True, "error_message": str(e)}
+
+async def get_membership_info(contact_id: int):
     params = {
         "select": ["membership_type_id:label", "status_id:label", "end_date"],
         "where": [["contact_id", "=", contact_id]],
         "orderBy": {"end_date": "DESC"},
         "limit": 3
     }
+    data = await _call_api("Membership", "get", params)
+    if data.get("is_error") or not data.get("values"):
+        return "No active membership records found."
     
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(endpoint, headers=headers, data={"params": json.dumps(params)})
-            resp.raise_for_status()
-            data = resp.json()
-            
-            if not data.get("values"):
-                return "No membership records found for this contact."
-            
-            summary = "Membership status:\n"
-            for m in data["values"]:
-                status = m.get("status_id:label", "Unknown")
-                m_type = m.get("membership_type_id:label", "Unknown")
-                end_date = m.get("end_date", "N/A")
-                summary += f"- {m_type}: {status} (Expires: {end_date})\n"
-            return summary
-            
-    except Exception as e:
-        logger.error(f"Membership lookup failed: {e}")
-        return "Error retrieving membership information."
+    summary = "Membership status:\n"
+    for m in data["values"]:
+        status = m.get("status_id:label", "Unknown")
+        m_type = m.get("membership_type_id:label", "Unknown")
+        end_date = m.get("end_date", "N/A")
+        summary += f"- {m_type}: {status} (Expires: {end_date})\n"
+    return summary
 
-async def get_address_info(contact_id: int):
+async def list_contact_info(contact_id: int):
     """
-    Returns the primary address for the contact.
+    Returns a summary of all addresses, phone numbers, and emails.
     """
-    url = os.getenv("CIVICRM_API_URL")
-    if not url:
-        return "CiviCRM API not configured."
+    results = {}
     
-    endpoint = url.rstrip("/") + "/Address/get"
-    api_key = os.getenv("CIVICRM_API_KEY")
-    site_key = os.getenv("CIVICRM_SITE_KEY")
+    # Get Addresses
+    addr_data = await _call_api("Address", "get", {
+        "select": ["id", "street_address", "city", "postal_code", "location_type_id:label", "is_primary"],
+        "where": [["contact_id", "=", contact_id]]
+    })
+    results["addresses"] = addr_data.get("values", [])
     
-    headers = {
-        "X-Civi-Auth": f"Bearer {api_key}",
-        "X-Civi-Key": site_key,
-        "X-Requested-With": "XMLHttpRequest",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
+    # Get Phones
+    phone_data = await _call_api("Phone", "get", {
+        "select": ["id", "phone", "location_type_id:label", "is_primary"],
+        "where": [["contact_id", "=", contact_id]]
+    })
+    results["phones"] = phone_data.get("values", [])
     
-    params = {
-        "select": ["id", "street_address", "city", "state_province_id:label", "postal_code", "is_primary"],
-        "where": [["contact_id", "=", contact_id]],
-        "limit": 5
-    }
+    # Get Emails
+    email_data = await _call_api("Email", "get", {
+        "select": ["id", "email", "location_type_id:label", "is_primary"],
+        "where": [["contact_id", "=", contact_id]]
+    })
+    results["emails"] = email_data.get("values", [])
     
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(endpoint, headers=headers, data={"params": json.dumps(params)})
-            resp.raise_for_status()
-            data = resp.json()
-            
-            if not data.get("values"):
-                return "No address on file."
-            
-            # Prefer primary
-            addr_list = data["values"]
-            primary = next((a for m in addr_list if (a := m).get("is_primary")), addr_list[0])
-            
-            return {
-                "id": primary.get("id"),
-                "display": f"{primary.get('street_address')}, {primary.get('city')}, {primary.get('state_province_id:label')} {primary.get('postal_code')}",
-                "street": primary.get("street_address"),
-                "city": primary.get("city"),
-                "zip": primary.get("postal_code")
-            }
-            
-    except Exception as e:
-        logger.error(f"Address lookup failed: {e}")
-        return "Error retrieving address."
-
-async def update_address(contact_id: int, street_address: str, city: str, postal_code: str):
-    """
-    Updates the primary address for the contact.
-    """
-    url = os.getenv("CIVICRM_API_URL")
-    if not url:
-        return "CiviCRM API not configured."
+    summary = "Current Contact Information:\n\n"
     
-    # First get existing address to see if we update or create
-    existing = await get_address_info(contact_id)
-    
-    endpoint = url.rstrip("/") + "/Address/save"
-    api_key = os.getenv("CIVICRM_API_KEY")
-    site_key = os.getenv("CIVICRM_SITE_KEY")
-    
-    headers = {
-        "X-Civi-Auth": f"Bearer {api_key}",
-        "X-Civi-Key": site_key,
-        "X-Requested-With": "XMLHttpRequest",
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-    
-    record = {
-        "contact_id": contact_id,
-        "street_address": street_address,
-        "city": city,
-        "postal_code": postal_code,
-        "state_province_id": 1042, # Texas
-        "is_primary": True,
-        "location_type_id": 1 # Home
-    }
-    
-    # If we have an existing ID, include it to update rather than create another
-    if isinstance(existing, dict) and existing.get("id"):
-        record["id"] = existing["id"]
+    summary += "Addresses:\n"
+    if not results["addresses"]: summary += "- None\n"
+    for a in results["addresses"]:
+        primary = " (PRIMARY)" if a.get("is_primary") else ""
+        summary += f"- ID {a['id']}: {a['street_address']}, {a['city']} {a['postal_code']} [{a['location_type_id:label']}]{primary}\n"
         
+    summary += "\nPhone Numbers:\n"
+    if not results["phones"]: summary += "- None\n"
+    for p in results["phones"]:
+        primary = " (PRIMARY)" if p.get("is_primary") else ""
+        summary += f"- ID {p['id']}: {p['phone']} [{p['location_type_id:label']}]{primary}\n"
+        
+    summary += "\nEmails:\n"
+    if not results["emails"]: summary += "- None\n"
+    for e in results["emails"]:
+        primary = " (PRIMARY)" if e.get("is_primary") else ""
+        summary += f"- ID {e['id']}: {e['email']} [{e['location_type_id:label']}]{primary}\n"
+        
+    return summary
+
+async def add_address(contact_id: int, street: str, city: str, zip_code: str, is_primary: bool = False):
     params = {
-        "records": [record]
+        "records": [{
+            "contact_id": contact_id,
+            "street_address": street,
+            "city": city,
+            "postal_code": zip_code,
+            "location_type_id": 1, # Home
+            "is_primary": is_primary
+        }]
     }
-    
-    try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.post(endpoint, headers=headers, data={"params": json.dumps(params)})
-            resp.raise_for_status()
-            data = resp.json()
-            
-            if data.get("is_error"):
-                return f"Failed to update address: {data.get('error_message')}"
-            
-            return "Address updated successfully."
-            
-    except Exception as e:
-        logger.error(f"Address update failed: {e}")
-        return "Error updating address."
+    data = await _call_api("Address", "save", params)
+    return "Address added successfully." if not data.get("is_error") else f"Error: {data.get('error_message')}"
+
+async def add_phone(contact_id: int, phone: str, is_primary: bool = False):
+    params = {
+        "records": [{
+            "contact_id": contact_id,
+            "phone": phone,
+            "location_type_id": 1, # Home
+            "is_primary": is_primary
+        }]
+    }
+    data = await _call_api("Phone", "save", params)
+    return "Phone number added successfully." if not data.get("is_error") else f"Error: {data.get('error_message')}"
+
+async def add_email(contact_id: int, email: str, is_primary: bool = False):
+    params = {
+        "records": [{
+            "contact_id": contact_id,
+            "email": email,
+            "location_type_id": 1, # Home
+            "is_primary": is_primary
+        }]
+    }
+    data = await _call_api("Email", "save", params)
+    return "Email added successfully." if not data.get("is_error") else f"Error: {data.get('error_message')}"
+
+async def set_primary_record(entity: str, record_id: int):
+    """
+    Sets a specific record (Address, Phone, or Email) as primary.
+    """
+    params = {
+        "records": [{
+            "id": record_id,
+            "is_primary": True
+        }]
+    }
+    data = await _call_api(entity, "save", params)
+    return f"{entity} updated to primary." if not data.get("is_error") else f"Error: {data.get('error_message')}"

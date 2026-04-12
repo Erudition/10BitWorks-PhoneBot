@@ -210,29 +210,55 @@ async def websocket_endpoint(websocket: WebSocket):
                 required=[]
             ),
             FunctionSchema(
-                name="get_my_address",
-                description="Retrieves the primary street address, city, and zip code we have on file for the caller. Only use this if the caller is recognized.",
+                name="list_my_contact_info",
+                description="Lists all addresses, phone numbers, and email addresses we have on file for the caller. Only use this if the caller is recognized.",
                 properties={},
                 required=[]
             ),
             FunctionSchema(
-                name="update_my_address",
-                description="Updates the caller's primary street address, city, and zip code in our records. Only use this if the caller is recognized.",
+                name="add_new_address",
+                description="Adds a new address to the caller's record. Does NOT delete old ones.",
                 properties={
-                    "street_address": {
-                        "type": "string",
-                        "description": "The new street address (e.g. 123 Main St)."
-                    },
-                    "city": {
-                        "type": "string",
-                        "description": "The city (e.g. San Antonio)."
-                    },
-                    "postal_code": {
-                        "type": "string",
-                        "description": "The 5-digit zip code (e.g. 78201)."
-                    }
+                    "street_address": {"type": "string", "description": "Street address (e.g. 123 Main St)."},
+                    "city": {"type": "string", "description": "City (e.g. San Antonio)."},
+                    "postal_code": {"type": "string", "description": "5-digit zip code (e.g. 78201)."},
+                    "is_primary": {"type": "boolean", "description": "Whether this should be the primary address."}
                 },
                 required=["street_address", "city", "postal_code"]
+            ),
+            FunctionSchema(
+                name="add_new_phone",
+                description="Adds a new phone number to the caller's record.",
+                properties={
+                    "phone_number": {"type": "string", "description": "Phone number in E.164 format (e.g. +12105551212)."},
+                    "is_primary": {"type": "boolean", "description": "Whether this should be the primary phone number."}
+                },
+                required=["phone_number"]
+            ),
+            FunctionSchema(
+                name="add_new_email",
+                description="Adds a new email address to the caller's record.",
+                properties={
+                    "email_address": {"type": "string", "description": "Email address (e.g. user@example.com)."},
+                    "is_primary": {"type": "boolean", "description": "Whether this should be the primary email."}
+                },
+                required=["email_address"]
+            ),
+            FunctionSchema(
+                name="set_info_as_primary",
+                description="Changes which existing record is marked as primary. Requires the Record ID (provided by list_my_contact_info) and the entity type.",
+                properties={
+                    "entity_type": {
+                        "type": "string",
+                        "enum": ["Address", "Phone", "Email"],
+                        "description": "The type of record being updated."
+                    },
+                    "record_id": {
+                        "type": "integer",
+                        "description": "The unique ID of the specific record to make primary."
+                    }
+                },
+                required=["entity_type", "record_id"]
             )
         ],
         custom_tools={AdapterType.GEMINI: [{"google_search": {}}]},
@@ -338,36 +364,54 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             await params.result_callback({"status": "error", "message": str(e)})
 
-    async def get_membership_handler(params: FunctionCallParams):
+    async def list_info_handler(params: FunctionCallParams):
         if not caller_contact_id:
-            await params.result_callback({"status": "error", "message": "I'm sorry, I don't recognize your phone number, so I can't access your membership details yet."})
+            await params.result_callback({"status": "error", "message": "I don't recognize your phone number, so I can't access your details."})
             return
-        logger.info(f"Bot checking membership for contact {caller_contact_id}")
-        info = await civicrm_agent.get_membership_info(caller_contact_id)
-        await params.result_callback({"status": "success", "message": info})
+        logger.info(f"Bot listing info for contact {caller_contact_id}")
+        summary = await civicrm_agent.list_contact_info(caller_contact_id)
+        await params.result_callback({"status": "success", "message": summary})
 
-    async def get_address_handler(params: FunctionCallParams):
+    async def add_address_handler(params: FunctionCallParams):
         if not caller_contact_id:
-            await params.result_callback({"status": "error", "message": "I'm sorry, I don't recognize your phone number, so I can't look up your address."})
+            await params.result_callback({"status": "error", "message": "Unrecognized caller."})
             return
-        logger.info(f"Bot checking address for contact {caller_contact_id}")
-        info = await civicrm_agent.get_address_info(caller_contact_id)
-        if isinstance(info, dict):
-            await params.result_callback({"status": "success", "message": f"We have your primary address as: {info['display']}"})
-        else:
-            await params.result_callback({"status": "error", "message": info})
-
-    async def update_address_handler(params: FunctionCallParams):
-        if not caller_contact_id:
-            await params.result_callback({"status": "error", "message": "I'm sorry, I don't recognize your phone number, so I can't update your address."})
-            return
-        
         street = params.arguments.get("street_address")
         city = params.arguments.get("city")
         zip_code = params.arguments.get("postal_code")
-        
-        logger.info(f"Bot updating address for contact {caller_contact_id} to {street}, {city}, {zip_code}")
-        result = await civicrm_agent.update_address(caller_contact_id, street, city, zip_code)
+        is_primary = params.arguments.get("is_primary", False)
+        logger.info(f"Bot adding address for contact {caller_contact_id}")
+        result = await civicrm_agent.add_address(caller_contact_id, street, city, zip_code, is_primary)
+        await params.result_callback({"status": "success", "message": result})
+
+    async def add_phone_handler(params: FunctionCallParams):
+        if not caller_contact_id:
+            await params.result_callback({"status": "error", "message": "Unrecognized caller."})
+            return
+        phone = params.arguments.get("phone_number")
+        is_primary = params.arguments.get("is_primary", False)
+        logger.info(f"Bot adding phone for contact {caller_contact_id}")
+        result = await civicrm_agent.add_phone(caller_contact_id, phone, is_primary)
+        await params.result_callback({"status": "success", "message": result})
+
+    async def add_email_handler(params: FunctionCallParams):
+        if not caller_contact_id:
+            await params.result_callback({"status": "error", "message": "Unrecognized caller."})
+            return
+        email = params.arguments.get("email_address")
+        is_primary = params.arguments.get("is_primary", False)
+        logger.info(f"Bot adding email for contact {caller_contact_id}")
+        result = await civicrm_agent.add_email(caller_contact_id, email, is_primary)
+        await params.result_callback({"status": "success", "message": result})
+
+    async def set_primary_handler(params: FunctionCallParams):
+        if not caller_contact_id:
+            await params.result_callback({"status": "error", "message": "Unrecognized caller."})
+            return
+        entity = params.arguments.get("entity_type")
+        record_id = params.arguments.get("record_id")
+        logger.info(f"Bot setting primary {entity} record {record_id} for contact {caller_contact_id}")
+        result = await civicrm_agent.set_primary_record(entity, record_id)
         await params.result_callback({"status": "success", "message": result})
 
     llm.register_function("end_call", hang_up, cancel_on_interruption=False, timeout_secs=5.0)
@@ -375,8 +419,11 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("transfer_call", start_transfer, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("check_my_membership", get_membership_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("get_my_address", get_address_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("update_my_address", update_address_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("list_my_contact_info", list_info_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("add_new_address", add_address_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("add_new_phone", add_phone_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("add_new_email", add_email_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("set_info_as_primary", set_primary_handler, cancel_on_interruption=False, timeout_secs=5.0)
 
     async def session_warning_task():
         try:
