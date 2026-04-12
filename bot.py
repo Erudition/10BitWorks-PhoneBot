@@ -127,6 +127,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
     transport_type, call_data = await parse_telephony_websocket(websocket)
     logger.info(f"Accepted {transport_type} call: {call_data}")
+    
+    # Extract the caller number passed via TwiML stream parameters
+    caller_number = call_data.get("body", {}).get("caller_number", "Unknown Caller")
 
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
@@ -358,7 +361,7 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Client connected: {client}")
         now = datetime.now(ZoneInfo("America/Chicago")).strftime("%A, %B %d, %Y at %I:%M %p")
         context.add_message(
-            {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. Simply say: 'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"}
+            {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}. Simply say: 'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"}
         )
         await task.queue_frames([LLMRunFrame()])
 
