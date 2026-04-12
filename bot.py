@@ -201,6 +201,7 @@ async def websocket_endpoint(websocket: WebSocket):
             voice="Charon",
         ),
         tools=tools,
+        reconnect_on_error=False
     )
 
     # State for tracking speech via a FrameProcessor
