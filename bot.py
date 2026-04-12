@@ -299,14 +299,34 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("transfer_call", start_transfer, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
 
-    async def session_warning_task(interval=540):
-        await asyncio.sleep(interval)
+    async def session_warning_task():
         try:
-            logger.info("Sending 1-minute session warning to bot context.")
+            # 7 minute warning (420 seconds)
+            await asyncio.sleep(420)
+            logger.info("Sending 3-minute session warning to bot context.")
             context.add_message(
-                {"role": "developer", "content": "SYSTEM WARNING: There is only 1 minute remaining in this call. Please wrap up."}
+                {"role": "developer", "content": "SYSTEM WARNING: There are 3 minutes remaining in this call due to a technical limit. Please begin to wrap up the conversation."}
             )
             await task.queue_frames([LLMRunFrame()])
+
+            # 8 minute warning (+60 seconds)
+            await asyncio.sleep(60)
+            logger.info("Sending 2-minute session warning to bot context.")
+            context.add_message(
+                {"role": "developer", "content": "SYSTEM WARNING: There are 2 minutes remaining. You must wrap up now."}
+            )
+            await task.queue_frames([LLMRunFrame()])
+
+            # 9 minute warning (+60 seconds)
+            await asyncio.sleep(60)
+            logger.info("Sending 1-minute session warning to bot context.")
+            context.add_message(
+                {"role": "developer", "content": "CRITICAL SYSTEM WARNING: There is only 1 minute remaining. You MUST conclude the conversation and call the end_call tool IMMEDIATELY."}
+            )
+            await task.queue_frames([LLMRunFrame()])
+            
+        except asyncio.CancelledError:
+            pass
         except Exception as e:
             logger.error(f"Failed to send session warning: {e}")
 
