@@ -35,6 +35,8 @@ app = FastAPI()
 
 # Configuration
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+# Note: Using the model name without the "models/" prefix or v1alpha features
+# was required to resolve the 1011 internal error.
 MODEL_NAME = "gemini-3.1-flash-live-preview"
 
 if not GOOGLE_API_KEY:
@@ -138,7 +140,6 @@ async def websocket_endpoint(websocket: WebSocket):
     transport_type, call_data = await parse_telephony_websocket(websocket)
     logger.info(f"Accepted {transport_type} call: {call_data}")
     
-    # Extract the caller number passed via TwiML stream parameters
     caller_number = call_data.get("body", {}).get("caller_number", "Unknown Caller")
 
     serializer = TwilioFrameSerializer(
@@ -216,6 +217,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 required=[]
             ),
             FunctionSchema(
+                name="create_my_contact_record",
+                description="Creates a new contact record for the current caller in our database. Use this ONLY after an unrecognized caller has provided their first and last name and expressed interest in being registered.",
+                properties={
+                    "first_name": {"type": "string", "description": "The caller's first name."},
+                    "last_name": {"type": "string", "description": "The caller's last name."}
+                },
+                required=["first_name", "last_name"]
+            ),
+            FunctionSchema(
                 name="add_new_address",
                 description="Adds a new address to the caller's record. Does NOT delete old ones.",
                 properties={
@@ -275,7 +285,6 @@ async def websocket_endpoint(websocket: WebSocket):
         reconnect_on_error=False
     )
 
-    # State for tracking speech via a FrameProcessor
     class SpeechTracker(FrameProcessor):
         def __init__(self):
             super().__init__()
@@ -283,7 +292,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
         async def process_frame(self, frame: Frame, direction: FrameDirection):
             await super().process_frame(frame, direction)
-            # Intercept frames pushed UPSTREAM by the output transport
             if isinstance(frame, BotStartedSpeakingFrame):
                 self.is_speaking = True
             elif isinstance(frame, BotStoppedSpeakingFrame):
@@ -294,19 +302,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def wait_and_terminate():
         logger.info("wait_and_terminate started: waiting for audio to finish.")
-        # 1. Give the bot a moment to start speaking
         await asyncio.sleep(1.0)
-        
-        # 2. Wait for the bot to finish its sentence
         max_wait = 30.0
         start_time = asyncio.get_event_loop().time()
         while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
-            
-        # 3. Small buffer to allow the last few packets to cross the network to Twilio
         logger.info("Bot finished speaking. Waiting 0.5s for network flush...")
         await asyncio.sleep(0.5)
-        
         logger.info("Terminating pipeline with CancelTaskFrame.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
@@ -314,7 +316,6 @@ async def websocket_endpoint(websocket: WebSocket):
         call_sid = call_data["call_id"]
         logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
-        await params.result_callback({"status": "hanging_up"})
         asyncio.create_task(wait_and_terminate())
 
     async def notify_slack(params: FunctionCallParams):
@@ -324,7 +325,6 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.error("SLACK_WEBHOOK_URL not found in environment")
             await params.result_callback({"status": "error", "message": "Slack webhook not configured"})
             return
-
         payload = {"message": f"Knowledge Base Gap Reported:\n{observation}"}
         try:
             async with httpx.AsyncClient(timeout=4.5) as client:
@@ -341,9 +341,6 @@ async def websocket_endpoint(websocket: WebSocket):
         call_sid = call_data["call_id"]
         logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
         pending_transfers[call_sid] = phone_number
-        # By NOT returning a result_callback, we freeze the Gemini model
-        # so it cannot generate any new hallucinated audio while the final
-        # "Transferring you now" audio finishes playing and the pipeline terminates.
         asyncio.create_task(wait_and_terminate())
 
     async def lookup_contact_handler(params: FunctionCallParams):
@@ -366,17 +363,15 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def get_membership_handler(params: FunctionCallParams):
         if not caller_contact_id:
-            await params.result_callback({"status": "error", "message": "I don't recognize your phone number, so I can't access your membership details yet."})
+            await params.result_callback({"status": "error", "message": "I don't recognize your phone number."})
             return
-        logger.info(f"Bot checking membership for contact {caller_contact_id}")
         info = await civicrm_agent.get_membership_info(caller_contact_id)
         await params.result_callback({"status": "success", "message": info})
 
     async def list_info_handler(params: FunctionCallParams):
         if not caller_contact_id:
-            await params.result_callback({"status": "error", "message": "I don't recognize your phone number, so I can't access your details."})
+            await params.result_callback({"status": "error", "message": "Unrecognized caller."})
             return
-        logger.info(f"Bot listing info for contact {caller_contact_id}")
         summary = await civicrm_agent.list_contact_info(caller_contact_id)
         await params.result_callback({"status": "success", "message": summary})
 
@@ -384,43 +379,41 @@ async def websocket_endpoint(websocket: WebSocket):
         if not caller_contact_id:
             await params.result_callback({"status": "error", "message": "Unrecognized caller."})
             return
-        street = params.arguments.get("street_address")
-        city = params.arguments.get("city")
-        zip_code = params.arguments.get("postal_code")
-        is_primary = params.arguments.get("is_primary", False)
-        logger.info(f"Bot adding address for contact {caller_contact_id}")
-        result = await civicrm_agent.add_address(caller_contact_id, street, city, zip_code, is_primary)
+        result = await civicrm_agent.add_address(caller_contact_id, params.arguments.get("street_address"), params.arguments.get("city"), params.arguments.get("postal_code"), params.arguments.get("is_primary", False))
         await params.result_callback({"status": "success", "message": result})
 
     async def add_phone_handler(params: FunctionCallParams):
         if not caller_contact_id:
             await params.result_callback({"status": "error", "message": "Unrecognized caller."})
             return
-        phone = params.arguments.get("phone_number")
-        is_primary = params.arguments.get("is_primary", False)
-        logger.info(f"Bot adding phone for contact {caller_contact_id}")
-        result = await civicrm_agent.add_phone(caller_contact_id, phone, is_primary)
+        result = await civicrm_agent.add_phone(caller_contact_id, params.arguments.get("phone_number"), params.arguments.get("is_primary", False))
         await params.result_callback({"status": "success", "message": result})
 
     async def add_email_handler(params: FunctionCallParams):
         if not caller_contact_id:
             await params.result_callback({"status": "error", "message": "Unrecognized caller."})
             return
-        email = params.arguments.get("email_address")
-        is_primary = params.arguments.get("is_primary", False)
-        logger.info(f"Bot adding email for contact {caller_contact_id}")
-        result = await civicrm_agent.add_email(caller_contact_id, email, is_primary)
+        result = await civicrm_agent.add_email(caller_contact_id, params.arguments.get("email_address"), params.arguments.get("is_primary", False))
         await params.result_callback({"status": "success", "message": result})
 
     async def set_primary_handler(params: FunctionCallParams):
         if not caller_contact_id:
             await params.result_callback({"status": "error", "message": "Unrecognized caller."})
             return
-        entity = params.arguments.get("entity_type")
-        record_id = params.arguments.get("record_id")
-        logger.info(f"Bot setting primary {entity} record {record_id} for contact {caller_contact_id}")
-        result = await civicrm_agent.set_primary_record(entity, record_id)
+        result = await civicrm_agent.set_primary_record(params.arguments.get("entity_type"), params.arguments.get("record_id"))
         await params.result_callback({"status": "success", "message": result})
+
+    async def create_contact_handler(params: FunctionCallParams):
+        first = params.arguments.get("first_name")
+        last = params.arguments.get("last_name")
+        logger.info(f"Bot creating new contact: {first} {last} for number {caller_number}")
+        result_data = await civicrm_agent.create_contact(first, last, caller_number)
+        if result_data["success"]:
+            nonlocal caller_contact_id
+            caller_contact_id = result_data["contact_id"]
+            await params.result_callback({"status": "success", "message": result_data["message"]})
+        else:
+            await params.result_callback({"status": "error", "message": result_data["message"]})
 
     llm.register_function("end_call", hang_up, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("report_missing_knowledge", notify_slack, cancel_on_interruption=False, timeout_secs=5.0)
@@ -432,60 +425,28 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("add_new_phone", add_phone_handler, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("add_new_email", add_email_handler, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("set_info_as_primary", set_primary_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("create_my_contact_record", create_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
 
     async def session_warning_task():
         try:
-            # 7 minute warning (420 seconds)
             await asyncio.sleep(420)
-            logger.info("Sending 3-minute session warning to bot context.")
-            context.add_message(
-                {"role": "developer", "content": "SYSTEM WARNING: There are 3 minutes remaining in this call due to a technical limit. Please begin to wrap up the conversation."}
-            )
-
-            # 8 minute warning (+60 seconds)
+            context.add_message({"role": "developer", "content": "SYSTEM WARNING: There are 3 minutes remaining in this call."})
             await asyncio.sleep(60)
-            logger.info("Sending 2-minute session warning to bot context.")
-            context.add_message(
-                {"role": "developer", "content": "SYSTEM WARNING: There are 2 minutes remaining. You must wrap up now."}
-            )
-
-            # 9 minute warning (+60 seconds)
+            context.add_message({"role": "developer", "content": "SYSTEM WARNING: There are 2 minutes remaining. You must wrap up now."})
             await asyncio.sleep(60)
-            logger.info("Sending 1-minute session warning to bot context.")
-            context.add_message(
-                {"role": "developer", "content": "CRITICAL SYSTEM WARNING: There is only 1 minute remaining. You MUST conclude the conversation and call the end_call tool IMMEDIATELY."}
-            )
-            # We ONLY force an interruption for the absolute final warning
+            context.add_message({"role": "developer", "content": "CRITICAL SYSTEM WARNING: There is only 1 minute remaining. You MUST end the call IMMEDIATELY."})
             await task.queue_frames([LLMRunFrame()])
-            
         except asyncio.CancelledError:
             pass
-        except Exception as e:
-            logger.error(f"Failed to send session warning: {e}")
 
     warning_task = asyncio.create_task(session_warning_task())
 
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
-    pipeline = Pipeline([
-        transport.input(),
-        user_aggregator,
-        llm,
-        speech_tracker,
-        transport.output(),
-        assistant_aggregator,
-    ])
+    pipeline = Pipeline([transport.input(), user_aggregator, llm, speech_tracker, transport.output(), assistant_aggregator])
 
-    task = PipelineTask(
-        pipeline,
-        params=PipelineParams(
-            audio_in_sample_rate=8000,
-            audio_out_sample_rate=8000,
-            enable_metrics=True,
-            enable_usage_metrics=True,
-        )
-    )
+    task = PipelineTask(pipeline, params=PipelineParams(audio_in_sample_rate=8000, audio_out_sample_rate=8000, enable_metrics=True, enable_usage_metrics=True))
 
     caller_contact_id = None
 
@@ -497,15 +458,22 @@ async def websocket_endpoint(websocket: WebSocket):
         nonlocal caller_contact_id
         contact_info = await civicrm_lookup.lookup_contact_by_phone(caller_number)
         
+        detail_block = "CURRENT CALLER INFO: Unknown Caller."
+        greeting = "'Thank you for calling 10BitWorks! Who am I speaking with today?'"
+        
         if contact_info:
-            caller_name = contact_info["name"]
             caller_contact_id = contact_info["contact_id"]
-            greeting = f"'Hi {caller_name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
-        else:
-            greeting = "'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"
+            name = contact_info["name"]
+            
+            # Fetch full profile for the prompt
+            membership = await civicrm_agent.get_membership_info(caller_contact_id)
+            contact_details = await civicrm_agent.list_contact_info(caller_contact_id)
+            
+            detail_block = f"CURRENT CALLER INFO: Recognized as {name} (ID: {caller_contact_id}).\n\n{membership}\n\n{contact_details}"
+            greeting = f"'Hi {name}! Thank you for calling 10BitWorks! How can I help you today?'"
             
         context.add_message(
-            {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}. Simply say: {greeting}"}
+            {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
         )
         await task.queue_frames([LLMRunFrame()])
 
@@ -513,27 +481,15 @@ async def websocket_endpoint(websocket: WebSocket):
     async def on_client_disconnected(transport, client):
         logger.info(f"Client disconnected: {client}")
         warning_task.cancel()
-        
         if caller_contact_id:
-            logger.info(f"Logging call activity for contact ID {caller_contact_id}")
             transcript = ""
             for msg in context.messages:
-                role = msg.get("role", "unknown").capitalize()
-                content = msg.get("content", "")
-                # Skip system/developer messages to keep it clean
-                if role not in ["System", "Developer"]:
-                    transcript += f"**{role}**: {content}\n\n"
-            
+                if msg.get("role") not in ["system", "developer"]:
+                    transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
             if transcript:
-                asyncio.create_task(civicrm_lookup.log_call_activity(
-                    contact_id=caller_contact_id,
-                    subject="Inbound Call via 10Bot",
-                    details=f"Call Transcript:\n\n{transcript}"
-                ))
-                
+                asyncio.create_task(civicrm_lookup.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}"))
         await task.cancel()
 
-    runner = PipelineRunner(handle_sigint=True)
     try:
         await runner.run(task)
     except Exception as e:

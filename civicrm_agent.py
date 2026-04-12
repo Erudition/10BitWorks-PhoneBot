@@ -152,3 +152,30 @@ async def set_primary_record(entity: str, record_id: int):
     }
     data = await _call_api(entity, "save", params)
     return f"{entity} updated to primary." if not data.get("is_error") else f"Error: {data.get('error_message')}"
+
+async def create_contact(first_name: str, last_name: str, phone_number: str):
+    """
+    Creates a new Individual contact and associates the phone number.
+    """
+    params = {
+        "records": [{
+            "contact_type": "Individual",
+            "first_name": first_name,
+            "last_name": last_name
+        }]
+    }
+    data = await _call_api("Contact", "save", params)
+    if data.get("is_error") or not data.get("values"):
+        return {"success": False, "message": data.get("error_message", "Unknown error creating contact")}
+    
+    contact_id = data["values"][0]["id"]
+    
+    # Add the phone number to the new contact
+    await add_phone(contact_id, phone_number, is_primary=True)
+    
+    return {
+        "success": True, 
+        "contact_id": contact_id, 
+        "message": f"Contact record created for {first_name} {last_name} with ID {contact_id}."
+    }
+
