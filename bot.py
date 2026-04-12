@@ -218,7 +218,7 @@ async def websocket_endpoint(websocket: WebSocket):
             ),
             FunctionSchema(
                 name="create_my_contact_record",
-                description="Creates a new contact record for the current caller in our database. Use this ONLY after an unrecognized caller has provided their first and last name and expressed interest in being registered.",
+                description="Creates a new contact record for the current caller in our database. Use this IMMEDIATELY after an unrecognized caller has provided their first and last name, so that we can accurately log their inquiry.",
                 properties={
                     "first_name": {"type": "string", "description": "The caller's first name."},
                     "last_name": {"type": "string", "description": "The caller's last name."}

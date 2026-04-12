@@ -40,6 +40,6 @@ This file documents critical architectural decisions, workarounds, and gotchas d
 *   **Caller Profile Injection**: For recognized contacts, the `on_client_connected` handler fetches a full CiviCRM profile (membership status with join/start/end dates, all addresses, phones, and emails) and injects it into a `CURRENT CALLER INFO` block in the initial developer prompt. This allows the bot to answer personal account questions instantly without tool calls.
 
 ## 7. CiviCRM Contact Management
-*   **Create Contact**: The bot can create new contact records for unrecognized callers using the `create_my_contact_record` tool. This tool requires a first and last name and automatically associates the caller's current phone number.
+*   **Create Contact**: The bot proactively creates new contact records for unrecognized callers using the `create_my_contact_record` tool as soon as they provide a first and last name. This ensures all inquiries are accurately logged in CiviCRM.
 *   **Safe Updates**: Data management tools (address, phone, email) are "add-only" or "primary-toggle" to prevent accidental deletion or overwriting of existing records. The bot cannot delete records.
 *   **Membership Intelligence**: Membership info now includes `join_date` and `start_date` alongside `end_date`, providing the bot with full context on the user's history with the makerspace.
