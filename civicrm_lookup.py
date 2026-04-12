@@ -106,3 +106,60 @@ def format_disambiguation_message(contacts):
     # Multiple phones for one contact
     options = [f"{p['label']}: {p['number']}" for p in phones]
     return f"I found multiple numbers for {contact['display_name']}: {', '.join(options)}. Which one should I call?"
+
+async def lookup_contact_by_phone(phone_number: str):
+    """
+    Queries CiviCRM for a contact by phone number and returns their first name or display name.
+    """
+    url = os.getenv("CIVICRM_API_URL")
+    if not url:
+        return None
+    
+    # Switch endpoint from Contact/get to Phone/get if necessary
+    url = url.replace("Contact/get", "Phone/get")
+    if not url.endswith("Phone/get"):
+        url = url.rstrip("/") + "/Phone/get"
+    
+    api_key = os.getenv("CIVICRM_API_KEY")
+    site_key = os.getenv("CIVICRM_SITE_KEY")
+    
+    headers = {
+        "X-Civi-Auth": f"Bearer {api_key}",
+        "X-Civi-Key": site_key,
+        "X-Requested-With": "XMLHttpRequest",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    
+    # Strip to digits for better matching
+    clean_phone = re.sub(r'[^\d]', '', phone_number)
+    if not clean_phone:
+        return None
+        
+    # Match the last 10 digits to handle country codes
+    match_phone = clean_phone[-10:] if len(clean_phone) >= 10 else clean_phone
+    
+    params = {
+        "select": ["contact_id.first_name", "contact_id.display_name"],
+        "where": [["phone", "LIKE", f"%{match_phone}%"]],
+        "limit": 1
+    }
+    
+    body = {
+        "params": json.dumps(params)
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=4.5) as client:
+            response = await client.post(url, headers=headers, data=body)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data.get("is_error") or not data.get("values"):
+                return None
+                
+            val = data["values"][0]
+            return val.get("contact_id.first_name") or val.get("contact_id.display_name")
+            
+    except Exception as e:
+        logger.error(f"Failed to lookup CiviCRM phone: {e}")
+        return None
