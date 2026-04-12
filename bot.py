@@ -271,7 +271,9 @@ async def websocket_endpoint(websocket: WebSocket):
         call_sid = call_data["call_id"]
         logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
         pending_transfers[call_sid] = phone_number
-        await params.result_callback({"status": "success", "message": f"Transferring to {phone_number}..."})
+        # By NOT returning a result_callback, we freeze the Gemini model
+        # so it cannot generate any new hallucinated audio while the final
+        # "Transferring you now" audio finishes playing and the pipeline terminates.
         asyncio.create_task(wait_and_terminate())
 
     async def lookup_contact_handler(params: FunctionCallParams):
