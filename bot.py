@@ -29,6 +29,7 @@ load_dotenv(override=True)
 
 import sync_knowledgebase
 import civicrm_lookup
+import civicrm_agent
 
 app = FastAPI()
 
@@ -201,6 +202,37 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                 },
                 required=["contact_name"]
+            ),
+            FunctionSchema(
+                name="check_my_membership",
+                description="Checks the caller's current membership status, type, and expiration date. Only use this if the caller is recognized.",
+                properties={},
+                required=[]
+            ),
+            FunctionSchema(
+                name="get_my_address",
+                description="Retrieves the primary street address, city, and zip code we have on file for the caller. Only use this if the caller is recognized.",
+                properties={},
+                required=[]
+            ),
+            FunctionSchema(
+                name="update_my_address",
+                description="Updates the caller's primary street address, city, and zip code in our records. Only use this if the caller is recognized.",
+                properties={
+                    "street_address": {
+                        "type": "string",
+                        "description": "The new street address (e.g. 123 Main St)."
+                    },
+                    "city": {
+                        "type": "string",
+                        "description": "The city (e.g. San Antonio)."
+                    },
+                    "postal_code": {
+                        "type": "string",
+                        "description": "The 5-digit zip code (e.g. 78201)."
+                    }
+                },
+                required=["street_address", "city", "postal_code"]
             )
         ],
         custom_tools={AdapterType.GEMINI: [{"google_search": {}}]},
@@ -306,10 +338,45 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             await params.result_callback({"status": "error", "message": str(e)})
 
+    async def get_membership_handler(params: FunctionCallParams):
+        if not caller_contact_id:
+            await params.result_callback({"status": "error", "message": "I'm sorry, I don't recognize your phone number, so I can't access your membership details yet."})
+            return
+        logger.info(f"Bot checking membership for contact {caller_contact_id}")
+        info = await civicrm_agent.get_membership_info(caller_contact_id)
+        await params.result_callback({"status": "success", "message": info})
+
+    async def get_address_handler(params: FunctionCallParams):
+        if not caller_contact_id:
+            await params.result_callback({"status": "error", "message": "I'm sorry, I don't recognize your phone number, so I can't look up your address."})
+            return
+        logger.info(f"Bot checking address for contact {caller_contact_id}")
+        info = await civicrm_agent.get_address_info(caller_contact_id)
+        if isinstance(info, dict):
+            await params.result_callback({"status": "success", "message": f"We have your primary address as: {info['display']}"})
+        else:
+            await params.result_callback({"status": "error", "message": info})
+
+    async def update_address_handler(params: FunctionCallParams):
+        if not caller_contact_id:
+            await params.result_callback({"status": "error", "message": "I'm sorry, I don't recognize your phone number, so I can't update your address."})
+            return
+        
+        street = params.arguments.get("street_address")
+        city = params.arguments.get("city")
+        zip_code = params.arguments.get("postal_code")
+        
+        logger.info(f"Bot updating address for contact {caller_contact_id} to {street}, {city}, {zip_code}")
+        result = await civicrm_agent.update_address(caller_contact_id, street, city, zip_code)
+        await params.result_callback({"status": "success", "message": result})
+
     llm.register_function("end_call", hang_up, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("report_missing_knowledge", notify_slack, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("transfer_call", start_transfer, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("check_my_membership", get_membership_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("get_my_address", get_address_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("update_my_address", update_address_handler, cancel_on_interruption=False, timeout_secs=5.0)
 
     async def session_warning_task():
         try:
