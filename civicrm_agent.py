@@ -191,3 +191,20 @@ async def create_contact(first_name: str, last_name: str, phone_number: str):
         "message": msg
     }
 
+async def log_call_activity(contact_id: int, subject: str, details: str):
+    """
+    Creates a 'Phone Call' activity (type 2) in CiviCRM associated with the given contact.
+    """
+    params = {
+        "values": {
+            "activity_type_id": 2, # 2 typically means Phone Call in CiviCRM
+            "subject": subject,
+            "details": details,
+            "status_id": 2, # 2 typically means Completed
+            "source_contact_id": 3800, # 10Bot System Contact
+            "target_contact_id": [contact_id]
+        }
+    }
+    data = await _call_api("Activity", "create", params)
+    return not data.get("is_error")
+
