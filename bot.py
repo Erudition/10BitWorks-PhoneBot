@@ -364,6 +364,14 @@ async def websocket_endpoint(websocket: WebSocket):
         except Exception as e:
             await params.result_callback({"status": "error", "message": str(e)})
 
+    async def get_membership_handler(params: FunctionCallParams):
+        if not caller_contact_id:
+            await params.result_callback({"status": "error", "message": "I don't recognize your phone number, so I can't access your membership details yet."})
+            return
+        logger.info(f"Bot checking membership for contact {caller_contact_id}")
+        info = await civicrm_agent.get_membership_info(caller_contact_id)
+        await params.result_callback({"status": "success", "message": info})
+
     async def list_info_handler(params: FunctionCallParams):
         if not caller_contact_id:
             await params.result_callback({"status": "error", "message": "I don't recognize your phone number, so I can't access your details."})
