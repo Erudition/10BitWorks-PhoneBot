@@ -487,7 +487,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg.get("role") not in ["system", "developer"]:
                     transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
             if transcript:
-                asyncio.create_task(civicrm_lookup.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}"))
+                asyncio.create_task(civicrm_agent.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}"))
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=True)
