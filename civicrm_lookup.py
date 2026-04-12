@@ -147,7 +147,7 @@ async def lookup_contact_by_phone(phone_number: str):
     match_phone = clean_phone[-10:] if len(clean_phone) >= 10 else clean_phone
     
     params = {
-        "select": ["contact_id.first_name", "contact_id.display_name"],
+        "select": ["contact_id.first_name", "contact_id.display_name", "contact_id"],
         "where": [["phone", "LIKE", f"%{match_phone}%"]],
         "limit": 1
     }
@@ -166,8 +166,63 @@ async def lookup_contact_by_phone(phone_number: str):
                 return None
                 
             val = data["values"][0]
-            return val.get("contact_id.first_name") or val.get("contact_id.display_name")
+            name = val.get("contact_id.first_name") or val.get("contact_id.display_name")
+            contact_id = val.get("contact_id")
+            
+            if name and contact_id:
+                return {"name": name, "contact_id": contact_id}
+            return None
             
     except Exception as e:
         logger.error(f"Failed to lookup CiviCRM phone: {e}")
         return None
+
+async def log_call_activity(contact_id: int, subject: str, details: str):
+    """
+    Creates a 'Phone Call' activity (type 2) in CiviCRM associated with the given contact.
+    """
+    url = os.getenv("CIVICRM_API_URL")
+    if not url:
+        return False
+        
+    url = url.replace("Contact/get", "Activity/create")
+    url = url.replace("Phone/get", "Activity/create")
+    if not url.endswith("Activity/create"):
+        url = url.rstrip("/") + "/Activity/create"
+        
+    api_key = os.getenv("CIVICRM_API_KEY")
+    site_key = os.getenv("CIVICRM_SITE_KEY")
+    
+    headers = {
+        "X-Civi-Auth": f"Bearer {api_key}",
+        "X-Civi-Key": site_key,
+        "X-Requested-With": "XMLHttpRequest",
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    
+    params = {
+        "values": {
+            "activity_type_id": 2, # 2 typically means Phone Call in CiviCRM
+            "subject": subject,
+            "details": details,
+            "status_id": 2, # 2 typically means Completed
+            "target_contact_id": [contact_id]
+        }
+    }
+    
+    body = {
+        "params": json.dumps(params)
+    }
+    
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(url, headers=headers, data=body)
+            response.raise_for_status()
+            data = response.json()
+            if data.get("is_error"):
+                logger.error(f"Failed to log CiviCRM activity: {data.get('error_message')}")
+                return False
+            return True
+    except Exception as e:
+        logger.error(f"Error logging CiviCRM activity: {e}")
+        return False

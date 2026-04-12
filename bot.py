@@ -365,14 +365,19 @@ async def websocket_endpoint(websocket: WebSocket):
         )
     )
 
+    caller_contact_id = None
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info(f"Client connected: {client}")
         now = datetime.now(ZoneInfo("America/Chicago")).strftime("%A, %B %d, %Y at %I:%M %p")
         
-        caller_name = await civicrm_lookup.lookup_contact_by_phone(caller_number)
+        nonlocal caller_contact_id
+        contact_info = await civicrm_lookup.lookup_contact_by_phone(caller_number)
         
-        if caller_name:
+        if contact_info:
+            caller_name = contact_info["name"]
+            caller_contact_id = contact_info["contact_id"]
             greeting = f"'Hi {caller_name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
         else:
             greeting = "'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"
@@ -386,6 +391,24 @@ async def websocket_endpoint(websocket: WebSocket):
     async def on_client_disconnected(transport, client):
         logger.info(f"Client disconnected: {client}")
         warning_task.cancel()
+        
+        if caller_contact_id:
+            logger.info(f"Logging call activity for contact ID {caller_contact_id}")
+            transcript = ""
+            for msg in context.messages:
+                role = msg.get("role", "unknown").capitalize()
+                content = msg.get("content", "")
+                # Skip system/developer messages to keep it clean
+                if role not in ["System", "Developer"]:
+                    transcript += f"**{role}**: {content}\n\n"
+            
+            if transcript:
+                asyncio.create_task(civicrm_lookup.log_call_activity(
+                    contact_id=caller_contact_id,
+                    subject="Inbound Call via 10Bot",
+                    details=f"Call Transcript:\n\n{transcript}"
+                ))
+                
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=True)
