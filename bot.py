@@ -221,18 +221,25 @@ async def websocket_endpoint(websocket: WebSocket):
     speech_tracker = SpeechTracker()
 
     async def wait_and_terminate():
-        await asyncio.sleep(0.5)
-        max_wait = 15.0
+        logger.info("wait_and_terminate started: waiting for audio to finish.")
+        await asyncio.sleep(1.0)
+        
+        silence_start = None
+        max_total_wait = 30.0
         start_time = asyncio.get_event_loop().time()
         
-        # Poll the speech_tracker state
-        while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
+        while (asyncio.get_event_loop().time() - start_time) < max_total_wait:
+            if speech_tracker.is_speaking:
+                silence_start = None
+            else:
+                if silence_start is None:
+                    silence_start = asyncio.get_event_loop().time()
+                elif (asyncio.get_event_loop().time() - silence_start) >= 1.5:
+                    logger.info("Bot has been silent for 1.5 seconds. Audio is complete.")
+                    break
             await asyncio.sleep(0.1)
             
-        logger.info("Bot finished speaking internally. Waiting 0.5s for audio tail to flush...")
-        await asyncio.sleep(0.5)
-        
-        logger.info("Audio tail flushed. Terminating pipeline.")
+        logger.info("Terminating pipeline with CancelTaskFrame.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def hang_up(params: FunctionCallParams):
