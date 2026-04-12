@@ -359,7 +359,7 @@ async def websocket_endpoint(websocket: WebSocket):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info(f"Client connected: {client}")
-        now = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+        now = datetime.now(ZoneInfo("America/Chicago")).strftime("%A, %B %d, %Y at %I:%M %p")
         context.add_message(
             {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. Simply say: 'Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! Who am I speaking with today?'"}
         )
