@@ -36,7 +36,7 @@ async def _call_api(entity: str, action: str, params: dict):
 
 async def get_membership_info(contact_id: int):
     params = {
-        "select": ["membership_type_id:label", "status_id:label", "end_date"],
+        "select": ["membership_type_id:label", "status_id:label", "join_date", "start_date", "end_date"],
         "where": [["contact_id", "=", contact_id]],
         "orderBy": {"end_date": "DESC"},
         "limit": 3
@@ -49,8 +49,10 @@ async def get_membership_info(contact_id: int):
     for m in data["values"]:
         status = m.get("status_id:label", "Unknown")
         m_type = m.get("membership_type_id:label", "Unknown")
+        join_date = m.get("join_date", "N/A")
+        start_date = m.get("start_date", "N/A")
         end_date = m.get("end_date", "N/A")
-        summary += f"- {m_type}: {status} (Expires: {end_date})\n"
+        summary += f"- {m_type}: {status} (Joined: {join_date}, Started: {start_date}, Expires: {end_date})\n"
     return summary
 
 async def list_contact_info(contact_id: int):

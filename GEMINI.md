@@ -37,3 +37,9 @@ This file documents critical architectural decisions, workarounds, and gotchas d
 
 ## 6. Context Management & Prompt Injection
 *   **Avoid Aggressive `LLMRunFrame`**: When injecting silent warnings or background context updates into the conversation history (e.g., a "time remaining" warning), do **NOT** queue an `LLMRunFrame()` immediately afterward. `LLMRunFrame()` mechanically forces the LLM to generate speech *right now*. If the bot has nothing conversational to say, this will cause it to abruptly interrupt the caller or "panic-speak" hallucinated text (like reciting random parts of its prompt). Simply use `context.add_message(...)` and let the bot naturally see the new context during its next regular conversational turn.
+*   **Caller Profile Injection**: For recognized contacts, the `on_client_connected` handler fetches a full CiviCRM profile (membership status with join/start/end dates, all addresses, phones, and emails) and injects it into a `CURRENT CALLER INFO` block in the initial developer prompt. This allows the bot to answer personal account questions instantly without tool calls.
+
+## 7. CiviCRM Contact Management
+*   **Create Contact**: The bot can create new contact records for unrecognized callers using the `create_my_contact_record` tool. This tool requires a first and last name and automatically associates the caller's current phone number.
+*   **Safe Updates**: Data management tools (address, phone, email) are "add-only" or "primary-toggle" to prevent accidental deletion or overwriting of existing records. The bot cannot delete records.
+*   **Membership Intelligence**: Membership info now includes `join_date` and `start_date` alongside `end_date`, providing the bot with full context on the user's history with the makerspace.
