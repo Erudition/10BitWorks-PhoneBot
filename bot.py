@@ -76,13 +76,22 @@ except Exception as e:
     logger.error(f"Failed to load system prompt or knowledgebase: {e}")
     sys.exit(1)
 
-@app.get("/twiml")
+@app.api_route("/twiml", methods=["GET", "POST"])
 async def twiml(request: Request):
     host = request.url.netloc
+    
+    if request.method == "POST":
+        form_data = await request.form()
+        from_number = form_data.get("From", "Unknown Caller")
+    else:
+        from_number = request.query_params.get("From", "Unknown Caller")
+        
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Connect>
-            <Stream url="wss://{host}/ws" />
+            <Stream url="wss://{host}/ws">
+                <Parameter name="caller_number" value="{from_number}" />
+            </Stream>
         </Connect>
         <Redirect method="POST">https://{host}/post_bot</Redirect>
     </Response>"""
