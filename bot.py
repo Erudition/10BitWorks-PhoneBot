@@ -224,23 +224,19 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def wait_and_terminate():
         logger.info("wait_and_terminate started: waiting for audio to finish.")
+        # 1. Give the bot a moment to start speaking
         await asyncio.sleep(1.0)
         
-        silence_start = None
-        max_total_wait = 30.0
+        # 2. Wait for the bot to finish its sentence
+        max_wait = 30.0
         start_time = asyncio.get_event_loop().time()
-        
-        while (asyncio.get_event_loop().time() - start_time) < max_total_wait:
-            if speech_tracker.is_speaking:
-                silence_start = None
-            else:
-                if silence_start is None:
-                    silence_start = asyncio.get_event_loop().time()
-                elif (asyncio.get_event_loop().time() - silence_start) >= 1.5:
-                    logger.info("Bot has been silent for 1.5 seconds. Audio is complete.")
-                    break
+        while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
             
+        # 3. Small buffer to allow the last few packets to cross the network to Twilio
+        logger.info("Bot finished speaking. Waiting 0.5s for network flush...")
+        await asyncio.sleep(0.5)
+        
         logger.info("Terminating pipeline with CancelTaskFrame.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
