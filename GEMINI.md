@@ -34,3 +34,6 @@ This file documents critical architectural decisions, workarounds, and gotchas d
 
 ## 5. Scope and Initialization
 *   Always define tool handlers and background tasks *after* the `llm` and `transport` objects are fully instantiated within the async endpoint. Defining them beforehand leads to `UnboundLocalError` crashes because the closure attempts to capture variables that aren't fully initialized.
+
+## 6. Context Management & Prompt Injection
+*   **Avoid Aggressive `LLMRunFrame`**: When injecting silent warnings or background context updates into the conversation history (e.g., a "time remaining" warning), do **NOT** queue an `LLMRunFrame()` immediately afterward. `LLMRunFrame()` mechanically forces the LLM to generate speech *right now*. If the bot has nothing conversational to say, this will cause it to abruptly interrupt the caller or "panic-speak" hallucinated text (like reciting random parts of its prompt). Simply use `context.add_message(...)` and let the bot naturally see the new context during its next regular conversational turn.
