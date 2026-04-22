@@ -30,6 +30,7 @@ load_dotenv(override=True)
 import sync_knowledgebase
 import civicrm_lookup
 import civicrm_agent
+import zammad_cti
 
 app = FastAPI()
 
@@ -94,10 +95,18 @@ async def twiml(request: Request):
         <Connect>
             <Stream url="wss://{host}/ws">
                 <Parameter name="caller_number" value="{from_number}" />
+                <Parameter name="destination_number" value="{to_number}" />
             </Stream>
         </Connect>
         <Redirect method="POST">https://{host}/post_bot</Redirect>
     </Response>"""
+    
+    # Push CTI newCall event to Zammad
+    call_sid = form_data.get("CallSid") if request.method == "POST" else request.query_params.get("CallSid")
+    to_number = form_data.get("To", "Unknown") if request.method == "POST" else request.query_params.get("To", "Unknown")
+    if call_sid:
+        asyncio.create_task(zammad_cti.log_new_call(from_number, to_number, call_sid))
+        
     return Response(content=twiml_response, media_type="application/xml")
 
 @app.post("/post_bot")
@@ -141,6 +150,7 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info(f"Accepted {transport_type} call: {call_data}")
     
     caller_number = call_data.get("body", {}).get("caller_number", "Unknown Caller")
+    destination_number = call_data.get("body", {}).get("destination_number", "Unknown")
 
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
@@ -472,6 +482,9 @@ async def websocket_endpoint(websocket: WebSocket):
             detail_block = f"CURRENT CALLER INFO: Recognized as {name} (ID: {caller_contact_id}).\n\n{membership}\n\n{contact_details}"
             greeting = f"'Hi {name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
             
+        # Trigger Zammad CTI answer event
+        asyncio.create_task(zammad_cti.log_answer(caller_number, destination_number, call_data["call_id"], answering_number="10Bot"))
+
         context.add_message(
             {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
         )
@@ -480,6 +493,10 @@ async def websocket_endpoint(websocket: WebSocket):
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info(f"Client disconnected: {client}")
+        
+        # Trigger Zammad CTI hangup event
+        asyncio.create_task(zammad_cti.log_hangup(caller_number, destination_number, call_data["call_id"]))
+
         warning_task.cancel()
         if caller_contact_id:
             transcript = ""
