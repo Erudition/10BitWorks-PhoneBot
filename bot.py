@@ -484,14 +484,21 @@ async def websocket_endpoint(websocket: WebSocket):
             detail_block = f"CURRENT CALLER INFO: Recognized as {name} (ID: {caller_contact_id}).\n\n{membership}\n\n{contact_details}"
             greeting = f"'Hi {name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
             
-        # Trigger Zammad CTI answer event (since the bot is now speaking)
+        # Determine the recipient label for Zammad CTI
+        recipient_label = "Makerspace"
+        if "2105470221" in destination_number:
+            recipient_label = "Virtual Receptionist"
+        elif "8559042954" in destination_number:
+            recipient_label = "Test Line"
+
+        # Trigger Zammad CTI answer event
         asyncio.create_task(zammad_cti.push_cti_event(
             "answer", 
             caller_number, 
             destination_number, 
             "in", 
             call_data["call_id"], 
-            user_name=name if contact_info else (caller_name or "Assistant"),
+            user_name=recipient_label,
             answering_number="10Bot"
         ))
 
