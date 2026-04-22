@@ -9,6 +9,8 @@ from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, Response
 from loguru import logger
 from dotenv import load_dotenv
+import uvloop
+uvloop.install()
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
@@ -376,8 +378,7 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.error(f"Failed to notify Slack: {e}")
             await params.result_callback({"status": "error", "message": str(e)})
 
-    @llm.register_function("transfer_call", timeout_secs=5.0)
-    async def transfer_call(args: FunctionCallParams):
+    async def transfer_call_handler(args: FunctionCallParams):
         phone_number = args.arguments.get("phone_number")
         contact_name = args.arguments.get("contact_name", "a volunteer")
         logger.info(f"Transferring call for {call_data['call_id']} to {contact_name} at {phone_number}")
@@ -463,6 +464,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     llm.register_function("end_call", hang_up, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("report_missing_knowledge", notify_slack, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("transfer_call", transfer_call_handler, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("check_my_membership", get_membership_handler, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("list_my_contact_info", list_info_handler, cancel_on_interruption=False, timeout_secs=5.0)
