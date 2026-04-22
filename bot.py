@@ -51,6 +51,7 @@ if not STUDIO_WEBHOOK_URL:
 # Global state for call transfers and hangups
 pending_transfers = {}
 pending_hangups = set()
+active_calls = {} # {call_sid: {"from": ..., "to": ...}}
 
 # Sync knowledgebase on startup
 logger.info("Syncing knowledgebase from Zammad...")
@@ -116,14 +117,35 @@ async def post_bot(request: Request):
         pending_hangups.remove(call_sid)
         return Response(content='<Response><Hangup/></Response>', media_type="application/xml")
     
-    target_number = pending_transfers.pop(call_sid, None)
-    if target_number:
-        logger.info(f"Executing transfer for {call_sid} to {target_number}")
+    transfer_data = pending_transfers.pop(call_sid, None)
+    if transfer_data:
+        target_number = transfer_data["number"]
+        target_name = transfer_data["name"]
+        
+        # Get caller info to send the 'answer' event to Zammad
+        call_info = active_calls.get(call_sid, {})
+        from_num = call_info.get("from", "Unknown")
+        
+        logger.info(f"Executing transfer for {call_sid} to {target_name} ({target_number})")
+        
+        # Push 'answer' to Zammad with the new target person's name
+        asyncio.create_task(zammad_cti.push_cti_event(
+            event="answer",
+            from_number=from_num,
+            to_number=target_number,
+            direction="in",
+            call_id=call_sid,
+            user_name=target_name
+        ))
+
         twiml = f"""<?xml version="1.0" encoding="UTF-8"?>
         <Response>
             <Dial>{target_number}</Dial>
         </Response>"""
         return Response(content=twiml, media_type="application/xml")
+    
+    # Cleanup active_calls
+    active_calls.pop(call_sid, None)
     
     if STUDIO_WEBHOOK_URL:
         sep = "&" if "?" in STUDIO_WEBHOOK_URL else "?"
@@ -149,6 +171,12 @@ async def websocket_endpoint(websocket: WebSocket):
     caller_number = call_data.get("body", {}).get("caller_number", "Unknown Caller")
     destination_number = call_data.get("body", {}).get("destination_number", "Unknown")
     caller_name = call_data.get("body", {}).get("caller_name", "")
+
+    # Store active call info for CTI updates during transfer
+    active_calls[call_data["call_id"]] = {
+        "from": caller_number,
+        "to": destination_number
+    }
 
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
@@ -197,9 +225,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     "phone_number": {
                         "type": "string",
                         "description": "The E.164 formatted phone number to transfer to (e.g. +12105551212)."
+                    },
+                    "contact_name": {
+                        "type": "string",
+                        "description": "The name of the person being transferred to (e.g. Greg)."
                     }
                 },
-                required=["phone_number"]
+                required=["phone_number", "contact_name"]
             ),
             FunctionSchema(
                 name="lookup_contact",
@@ -344,12 +376,18 @@ async def websocket_endpoint(websocket: WebSocket):
             logger.error(f"Failed to notify Slack: {e}")
             await params.result_callback({"status": "error", "message": str(e)})
 
-    async def start_transfer(params: FunctionCallParams):
-        phone_number = params.arguments.get("phone_number")
-        call_sid = call_data["call_id"]
-        logger.info(f"Bot requesting transfer to {phone_number} for call {call_sid}")
-        pending_transfers[call_sid] = phone_number
-        asyncio.create_task(wait_and_terminate())
+    @llm.register_function("transfer_call", timeout_secs=5.0)
+    async def transfer_call(args: FunctionCallParams):
+        phone_number = args.arguments.get("phone_number")
+        contact_name = args.arguments.get("contact_name", "a volunteer")
+        logger.info(f"Transferring call for {call_data['call_id']} to {contact_name} at {phone_number}")
+        
+        pending_transfers[call_data["call_id"]] = {
+            "number": phone_number,
+            "name": contact_name
+        }
+        await task.queue_frames([EndFrame()])
+        return {"status": "transfer_initiated"}
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
@@ -425,7 +463,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
     llm.register_function("end_call", hang_up, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("report_missing_knowledge", notify_slack, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("transfer_call", start_transfer, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("check_my_membership", get_membership_handler, cancel_on_interruption=False, timeout_secs=5.0)
     llm.register_function("list_my_contact_info", list_info_handler, cancel_on_interruption=False, timeout_secs=5.0)
