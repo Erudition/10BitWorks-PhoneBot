@@ -30,6 +30,7 @@ load_dotenv(override=True)
 import sync_knowledgebase
 import civicrm_lookup
 import civicrm_agent
+import zammad_cti
 
 app = FastAPI()
 
@@ -483,6 +484,17 @@ async def websocket_endpoint(websocket: WebSocket):
             detail_block = f"CURRENT CALLER INFO: Recognized as {name} (ID: {caller_contact_id}).\n\n{membership}\n\n{contact_details}"
             greeting = f"'Hi {name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
             
+        # Trigger Zammad CTI answer event (since the bot is now speaking)
+        asyncio.create_task(zammad_cti.push_cti_event(
+            "answer", 
+            caller_number, 
+            destination_number, 
+            "in", 
+            call_data["call_id"], 
+            user_name=name if contact_info else (caller_name or "Assistant"),
+            answering_number="10Bot"
+        ))
+
         context.add_message(
             {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
         )
