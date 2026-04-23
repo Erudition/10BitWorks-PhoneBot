@@ -172,6 +172,8 @@ async def post_bot(request: Request):
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     logger.info("Twilio WebSocket connection accepted")
+    
+    call_history = []
 
     transport_type, call_data = await parse_telephony_websocket(websocket)
     call_sid = call_data["call_id"]
@@ -357,19 +359,15 @@ async def websocket_endpoint(websocket: WebSocket):
             await super().process_frame(frame, direction)
             if isinstance(frame, BotStartedSpeakingFrame):
                 self.is_speaking = True
-                call_logger.debug("Bot started speaking")
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 self.is_speaking = False
-                call_logger.debug("Bot stopped speaking")
             elif isinstance(frame, TranscriptionFrame):
-                # Log both user and bot transcriptions
-                role = "User" if frame.user_id == "user" else "Bot"
-                call_logger.debug(f"[Transcription:{role}] [{frame.text}]")
+                if frame.user_id == "user":
+                    call_history.append(f"[User] {frame.text}")
             elif isinstance(frame, LLMContextFrame):
-                # Extract the bot's response from the context update at the end of a turn
                 for msg in reversed(frame.context.messages):
                     if msg.get("role") == "assistant" and msg.get("content"):
-                        call_logger.debug(f"[Transcription:Bot] {msg['content']}")
+                        call_history.append(f"[Bot] {msg['content']}")
                         break
             await self.push_frame(frame, direction)
 
@@ -611,6 +609,12 @@ async def websocket_endpoint(websocket: WebSocket):
     async def on_client_disconnected(transport, client):
         call_logger.info(f"Client disconnected for call {call_data['call_id']}")
         warning_task.cancel()
+        # Dump full conversation history to the log at the end
+        call_logger.debug("--- FINAL TRANSCRIPT ---")
+        for entry in call_history:
+            call_logger.debug(entry)
+        call_logger.debug("--- END TRANSCRIPT ---")
+
         if caller_contact_id:
             transcript = ""
             for msg in context.messages:
