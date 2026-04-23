@@ -3,6 +3,7 @@ fastapi
 uvicorn
 python-dotenv
 loguru
+httpx
 markdownify
 python-multipart
 uvloop
