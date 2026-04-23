@@ -180,7 +180,13 @@ async def websocket_endpoint(websocket: WebSocket):
     transport_type, call_data = await parse_telephony_websocket(websocket)
     call_sid = call_data["call_id"]
     # Choose a random voice for this call
-    VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
+    VOICES = [
+        "Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede",
+        "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
+        "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+        "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi",
+        "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"
+    ]
     selected_voice = random.choice(VOICES)
     
     # Set up per-call logging
