@@ -579,16 +579,17 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.remove(handler_id)
         await task.cancel()
 
-    runner = PipelineRunner(handle_sigint=True)
-    try:
-        await runner.run(task)
-    except Exception as e:
-        logger.error(f"Error running pipeline: {e}")
-    finally:
+    with logger.contextualize(call_id=call_sid):
+        runner = PipelineRunner(handle_sigint=True)
         try:
-            await websocket.close()
-        except RuntimeError:
-            pass
+            await runner.run(task)
+        except Exception as e:
+            call_logger.error(f"Error running pipeline: {e}")
+        finally:
+            try:
+                await websocket.close()
+            except RuntimeError:
+                pass
 
 if __name__ == "__main__":
     import uvicorn
