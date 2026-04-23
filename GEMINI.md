@@ -28,6 +28,9 @@ I will modify the SYSTEM_PROMPT file myself. You may suggest, but don't touch it
 *   **Parallel vs. Sequential Tool Calls**: Gemini may emit tool calls **simultaneously** with audio (Parallel mode) or **before** audio (Sequential mode). 
     *   *Hallucination Risk*: If a tool result arrives while the bot is already speaking its Parallel-mode answer, Gemini re-analyzes the context and often "restarts" its turn, tacking on hallucinated goodbyes or hangups.
     *   *Requirement*: Tracking/Background tools must use the **Hybrid Speech-Aware Strategy**: Wait for the bot to finish speaking before returning the result if it's already in a turn, but return immediately if it's waiting for the data.
+*   **Voice Rotation**: The assistant must randomly select a voice for each incoming call from the full set of 30 Gemini Live personas:
+    *   *Voices*: Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, Umbriel, Algieba, Despina, Erinome, Algenib, Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux, Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia, Sadaltager, Sulafat.
+    *   *Implementation*: Select the voice at the start of the `websocket_endpoint` and inject it into the `GeminiLiveLLMService` settings. Log the selected voice in the per-call log file.
 
 ## 2. Tool Calling with Gemini 3.1 Live
 *   **No Asynchronous Function Calling**: Gemini 3.1 Flash Live Preview does **not** currently support native asynchronous tool calling.

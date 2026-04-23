@@ -398,8 +398,8 @@ async def websocket_endpoint(websocket: WebSocket):
         start_time = asyncio.get_event_loop().time()
         while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
-        call_logger.info("Bot finished speaking. Waiting 0.5s for network flush...")
-        await asyncio.sleep(0.5)
+        call_logger.info("Bot finished speaking.")
+        # await asyncio.sleep(0.5)
         call_logger.info("Terminating pipeline with CancelTaskFrame.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
@@ -613,7 +613,7 @@ async def websocket_endpoint(websocket: WebSocket):
         ))
 
         context.add_message(
-            {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
+            {"role": "developer", "content": f"SYSTEM INFO: You are {selected_voice}. The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
         )
         await task.queue_frames([LLMRunFrame()])
 
