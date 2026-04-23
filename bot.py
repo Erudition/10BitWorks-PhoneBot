@@ -627,7 +627,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await civicrm_agent.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}")
                 
             # Create Zammad ticket with full transcript
-            customer_id = caller_number
+            customer_id = "10bot@10bitworks.org" # Fallback customer
             if caller_contact_id:
                 email = await civicrm_agent.get_contact_email(caller_contact_id)
                 if email:
@@ -636,10 +636,12 @@ async def websocket_endpoint(websocket: WebSocket):
             await zammad_agent.create_ticket(
                 title=f"Call Transcript: {caller_number}",
                 body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
-                customer=customer_id
+                customer=customer_id,
+                owner="10bot@10bitworks.org",
+                article_type="phone"
             )
         else:
-            # For unrecognized callers, create ticket using phone number
+            # For unrecognized callers, create ticket assigned to 10bot
             transcript = ""
             for msg in context.messages:
                 if msg.get("role") not in ["system", "developer"] and msg.get("content"):
@@ -648,7 +650,9 @@ async def websocket_endpoint(websocket: WebSocket):
             await zammad_agent.create_ticket(
                 title=f"Call Transcript (Unrecognized): {caller_number}",
                 body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
-                customer=caller_number
+                customer="10bot@10bitworks.org",
+                owner="10bot@10bitworks.org",
+                article_type="phone"
             )
         
         # Clean up per-call log sink

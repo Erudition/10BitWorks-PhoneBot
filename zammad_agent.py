@@ -2,11 +2,14 @@ import os
 import httpx
 from loguru import logger
 
-async def create_ticket(title: str, body: str, customer: str, group_id: int = 1):
+from typing import Union
+
+async def create_ticket(title: str, body: str, customer: str, group_id: int = 1, article_type: str = "phone", owner: Union[int, str] = None):
     """
     Creates a new ticket in Zammad via the REST API.
     'customer' can be an email address or a login.
-    'group_id' defaults to 1 (All Support Volunteers).
+    'article_type' defaults to 'phone' as requested.
+    'owner' can be a user ID (int) or a login (str).
     """
     token = os.getenv("ZAMMAD_API_TOKEN")
     base_url = "https://support.10bitworks.org/api/v1"
@@ -27,17 +30,23 @@ async def create_ticket(title: str, body: str, customer: str, group_id: int = 1)
         "article": {
             "subject": title,
             "body": body,
-            "type": "note",
+            "type": article_type,
             "internal": False
         }
     }
+    
+    if owner:
+        if isinstance(owner, int):
+            payload["owner_id"] = owner
+        else:
+            payload["owner"] = owner
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(f"{base_url}/tickets", headers=headers, json=payload)
             resp.raise_for_status()
             result = resp.json()
-            logger.info(f"Zammad ticket created successfully: #{result.get('number')} for {customer}")
+            logger.info(f"Zammad ticket created successfully: #{result.get('number')} for {customer} (Owner: {owner})")
             return result
     except Exception as e:
         logger.error(f"Failed to create Zammad ticket for {customer}: {e}")
