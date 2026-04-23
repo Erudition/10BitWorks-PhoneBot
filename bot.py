@@ -365,11 +365,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 self.is_speaking = False
                 call_logger.debug("Bot stopped speaking")
             elif isinstance(frame, TranscriptionFrame):
-                # We primarily track the User here; Bot transcription comes better from the Context frame
                 if frame.user_id == "user":
                     call_history.append(f"[User] {frame.text}")
             elif isinstance(frame, LLMContextFrame):
-                # Simply capture the last assistant message content
                 for msg in reversed(frame.context.messages):
                     if msg.get("role") == "assistant" and msg.get("content"):
                         call_history.append(f"[Bot] {msg['content']}")
@@ -544,9 +542,9 @@ async def websocket_endpoint(websocket: WebSocket):
         transport.input(),
         user_aggregator,
         llm,
-        assistant_aggregator,
         speech_tracker,
-        transport.output()
+        transport.output(),
+        assistant_aggregator
     ])
 
     task = PipelineTask(pipeline, params=PipelineParams(audio_in_sample_rate=8000, audio_out_sample_rate=8000, enable_metrics=True, enable_usage_metrics=True))
