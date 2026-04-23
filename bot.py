@@ -39,6 +39,7 @@ import sync_knowledgebase
 import civicrm_lookup
 import civicrm_agent
 import zammad_cti
+import zammad_agent
 
 app = FastAPI()
 
@@ -623,6 +624,31 @@ async def websocket_endpoint(websocket: WebSocket):
                     transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
             if transcript:
                 await civicrm_agent.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}")
+                
+            # Create Zammad ticket with full transcript
+            customer_id = caller_number
+            if caller_contact_id:
+                email = await civicrm_agent.get_contact_email(caller_contact_id)
+                if email:
+                    customer_id = email
+            
+            await zammad_agent.create_ticket(
+                title=f"Call Transcript: {caller_number}",
+                body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
+                customer=customer_id
+            )
+        else:
+            # For unrecognized callers, create ticket using phone number
+            transcript = ""
+            for msg in context.messages:
+                if msg.get("role") not in ["system", "developer"] and msg.get("content"):
+                    transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
+            
+            await zammad_agent.create_ticket(
+                title=f"Call Transcript (Unrecognized): {caller_number}",
+                body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
+                customer=caller_number
+            )
         
         # Clean up per-call log sink
         logger.remove(handler_id)

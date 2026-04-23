@@ -208,3 +208,19 @@ async def log_call_activity(contact_id: int, subject: str, details: str):
     data = await _call_api("Activity", "create", params)
     return not data.get("is_error")
 
+async def get_contact_email(contact_id: int):
+    """
+    Returns the primary email address for a contact, or None if not found.
+    """
+    params = {
+        "select": ["email"],
+        "where": [
+            ["contact_id", "=", contact_id],
+            ["is_primary", "=", 1]
+        ]
+    }
+    data = await _call_api("Email", "get", params)
+    if data.get("values"):
+        return data["values"][0].get("email")
+    return None
+
