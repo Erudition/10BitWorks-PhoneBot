@@ -617,43 +617,50 @@ async def websocket_endpoint(websocket: WebSocket):
             call_logger.debug(entry)
         call_logger.debug("--- END TRANSCRIPT ---")
 
+        # Generate transcript for logging/ticketing
+        transcript = ""
+        for msg in context.messages:
+            if msg.get("role") not in ["system", "developer"] and msg.get("content"):
+                transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
+
         if caller_contact_id:
-            transcript = ""
-            for msg in context.messages:
-                # Ensure we handle messages without content safely
-                if msg.get("role") not in ["system", "developer"] and msg.get("content"):
-                    transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
             if transcript:
-                await civicrm_agent.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}")
+                try:
+                    await civicrm_agent.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}")
+                    call_logger.info(f"Logged transcript to CiviCRM for contact {caller_contact_id}")
+                except Exception as e:
+                    call_logger.error(f"Failed to log transcript to CiviCRM: {e}")
                 
             # Create Zammad ticket with full transcript
             customer_id = "10bot@10bitworks.org" # Fallback customer
-            if caller_contact_id:
-                email = await civicrm_agent.get_contact_email(caller_contact_id)
-                if email:
-                    customer_id = email
+            email = await civicrm_agent.get_contact_email(caller_contact_id)
+            if email:
+                customer_id = email
             
-            await zammad_agent.create_ticket(
-                title=f"Call Transcript: {caller_number}",
-                body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
-                customer=customer_id,
-                owner="10bot@10bitworks.org",
-                article_type="phone"
-            )
+            try:
+                ticket = await zammad_agent.create_ticket(
+                    title=f"Call Transcript: {caller_number}",
+                    body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
+                    customer=customer_id,
+                    owner="10bot@10bitworks.org",
+                    article_type="phone"
+                )
+                call_logger.info(f"Created Zammad ticket {ticket.get('id')} for recognized caller {customer_id}")
+            except Exception as e:
+                call_logger.error(f"Failed to create Zammad ticket for recognized caller: {e}")
         else:
             # For unrecognized callers, create ticket assigned to 10bot
-            transcript = ""
-            for msg in context.messages:
-                if msg.get("role") not in ["system", "developer"] and msg.get("content"):
-                    transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
-            
-            await zammad_agent.create_ticket(
-                title=f"Call Transcript (Unrecognized): {caller_number}",
-                body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
-                customer="10bot@10bitworks.org",
-                owner="10bot@10bitworks.org",
-                article_type="phone"
-            )
+            try:
+                ticket = await zammad_agent.create_ticket(
+                    title=f"Call Transcript (Unrecognized): {caller_number}",
+                    body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
+                    customer="10bot@10bitworks.org",
+                    owner="10bot@10bitworks.org",
+                    article_type="phone"
+                )
+                call_logger.info(f"Created Zammad ticket {ticket.get('id')} for unrecognized caller")
+            except Exception as e:
+                call_logger.error(f"Failed to create Zammad ticket for unrecognized caller: {e}")
         
         # Clean up per-call log sink
         logger.remove(handler_id)
