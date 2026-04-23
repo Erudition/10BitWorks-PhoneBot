@@ -14,6 +14,9 @@ from dotenv import load_dotenv
 import uvloop
 uvloop.install()
 
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
 from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame
@@ -170,21 +173,32 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Twilio WebSocket connection accepted")
 
     transport_type, call_data = await parse_telephony_websocket(websocket)
-    logger.info(f"Accepted {transport_type} call: {call_data}")
+    call_sid = call_data["call_id"]
+    
+    # Set up per-call logging
+    log_file = f"logs/call_{call_sid}.log"
+    handler_id = logger.add(
+        log_file, 
+        filter=lambda record: record["extra"].get("call_id") == call_sid,
+        format="{time} | {level: <8} | {message}",
+        level="DEBUG" # Keep debug on for call files to catch jitter
+    )
+    call_logger = logger.bind(call_id=call_sid)
+    call_logger.info(f"Accepted {transport_type} call: {call_data}")
     
     caller_number = call_data.get("body", {}).get("caller_number", "Unknown Caller")
     destination_number = call_data.get("body", {}).get("destination_number", "Unknown")
     caller_name = call_data.get("body", {}).get("caller_name", "")
 
     # Store active call info for CTI updates during transfer
-    active_calls[call_data["call_id"]] = {
+    active_calls[call_sid] = {
         "from": caller_number,
         "to": destination_number
     }
 
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
-        call_sid=call_data["call_id"],
+        call_sid=call_sid,
         account_sid=os.getenv("TWILIO_ACCOUNT_SID"),
         auth_token=os.getenv("TWILIO_AUTH_TOKEN"),
         params=TwilioFrameSerializer.InputParams(
@@ -346,20 +360,20 @@ async def websocket_endpoint(websocket: WebSocket):
     speech_tracker = SpeechTracker()
 
     async def wait_and_terminate():
-        logger.info("wait_and_terminate started: waiting for audio to finish.")
+        call_logger.info("wait_and_terminate started: waiting for audio to finish.")
         await asyncio.sleep(1.0)
         max_wait = 30.0
         start_time = asyncio.get_event_loop().time()
         while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
-        logger.info("Bot finished speaking. Waiting 0.5s for network flush...")
+        call_logger.info("Bot finished speaking. Waiting 0.5s for network flush...")
         await asyncio.sleep(0.5)
-        logger.info("Terminating pipeline with CancelTaskFrame.")
+        call_logger.info("Terminating pipeline with CancelTaskFrame.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def hang_up(params: FunctionCallParams):
         call_sid = call_data["call_id"]
-        logger.info(f"Bot is ending the call {call_sid} via end_call tool")
+        call_logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
         asyncio.create_task(wait_and_terminate())
 
@@ -367,7 +381,7 @@ async def websocket_endpoint(websocket: WebSocket):
         observation = params.arguments.get("observation")
         webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         if not webhook_url:
-            logger.error("SLACK_WEBHOOK_URL not found in environment")
+            call_logger.error("SLACK_WEBHOOK_URL not found in environment")
             await params.result_callback({"status": "error", "message": "Slack webhook not configured"})
             return
         payload = {"message": f"Knowledge Base Gap Reported:\n{observation}"}
@@ -375,16 +389,16 @@ async def websocket_endpoint(websocket: WebSocket):
             async with httpx.AsyncClient(timeout=4.5) as client:
                 response = await client.post(webhook_url, json=payload)
                 response.raise_for_status()
-            logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
+            call_logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
             await params.result_callback({"status": "success", "message": "Observation logged for review. Continue the conversation naturally."})
         except Exception as e:
-            logger.error(f"Failed to notify Slack: {e}")
+            call_logger.error(f"Failed to notify Slack: {e}")
             await params.result_callback({"status": "error", "message": str(e)})
 
     async def transfer_call_handler(args: FunctionCallParams):
         phone_number = args.arguments.get("phone_number")
         contact_name = args.arguments.get("contact_name", "a volunteer")
-        logger.info(f"Transferring call for {call_data['call_id']} to {contact_name} at {phone_number}")
+        call_logger.info(f"Transferring call for {call_data['call_id']} to {contact_name} at {phone_number}")
         
         pending_transfers[call_data["call_id"]] = {
             "number": phone_number,
@@ -395,7 +409,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
-        logger.info(f"Bot requesting CiviCRM lookup for: {contact_name}")
+        call_logger.info(f"Bot requesting CiviCRM lookup for: {contact_name}")
         try:
             contacts = await asyncio.wait_for(civicrm_lookup.lookup_contact_by_name(contact_name), timeout=4.5)
             if len(contacts) == 1 and len(contacts[0]["phones"]) == 1:
@@ -551,7 +565,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.info(f"Client disconnected: {client}")
+        call_logger.info(f"Client disconnected for call {call_data['call_id']}")
         warning_task.cancel()
         if caller_contact_id:
             transcript = ""
@@ -560,6 +574,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
             if transcript:
                 await civicrm_agent.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}")
+        
+        # Clean up per-call log sink
+        logger.remove(handler_id)
         await task.cancel()
 
     runner = PipelineRunner(handle_sigint=True)
