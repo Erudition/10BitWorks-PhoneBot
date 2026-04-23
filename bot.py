@@ -8,23 +8,17 @@ import httpx
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, Response
 from loguru import logger
-logger.remove()
-logger.add(sys.stderr, level="INFO")
 from dotenv import load_dotenv
 import uvloop
 uvloop.install()
 
-# Ensure logs directory exists
-os.makedirs("logs", exist_ok=True)
-
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties, TextFrame, AudioRawFrame, LLMContextFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService, GeminiVADParams
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.llm_service import FunctionCallParams
@@ -174,35 +168,21 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info("Twilio WebSocket connection accepted")
 
     transport_type, call_data = await parse_telephony_websocket(websocket)
-    call_sid = call_data["call_id"]
-    
-    # Keep conversation history in memory and dump at the end to avoid blocking audio loop
-    call_history = []
-
-    # Set up per-call logging
-    log_file = f"logs/call_{call_sid}.log"
-    handler_id = logger.add(
-        log_file, 
-        filter=lambda record: record["extra"].get("call_id") == call_sid,
-        format="{time} | {level: <8} | {message}",
-        level="DEBUG" # Keep debug on for call files to catch jitter
-    )
-    call_logger = logger.bind(call_id=call_sid)
-    call_logger.info(f"Accepted {transport_type} call: {call_data}")
+    logger.info(f"Accepted {transport_type} call: {call_data}")
     
     caller_number = call_data.get("body", {}).get("caller_number", "Unknown Caller")
     destination_number = call_data.get("body", {}).get("destination_number", "Unknown")
     caller_name = call_data.get("body", {}).get("caller_name", "")
 
     # Store active call info for CTI updates during transfer
-    active_calls[call_sid] = {
+    active_calls[call_data["call_id"]] = {
         "from": caller_number,
         "to": destination_number
     }
 
     serializer = TwilioFrameSerializer(
         stream_sid=call_data["stream_id"],
-        call_sid=call_sid,
+        call_sid=call_data["call_id"],
         account_sid=os.getenv("TWILIO_ACCOUNT_SID"),
         auth_token=os.getenv("TWILIO_AUTH_TOKEN"),
         params=TwilioFrameSerializer.InputParams(
@@ -217,8 +197,7 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_enabled=True,
             add_wav_header=False,
             serializer=serializer,
-            fixed_audio_packet_size=320,
-            audio_out_can_send_silence=False
+            fixed_audio_packet_size=320
         )
     )
 
@@ -343,9 +322,6 @@ async def websocket_endpoint(websocket: WebSocket):
             model=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
-            vad=GeminiVADParams(
-                start_sensitivity="START_SENSITIVITY_LOW"
-            )
         ),
         tools=tools,
         reconnect_on_error=False
@@ -360,42 +336,27 @@ async def websocket_endpoint(websocket: WebSocket):
             await super().process_frame(frame, direction)
             if isinstance(frame, BotStartedSpeakingFrame):
                 self.is_speaking = True
-                call_logger.debug("Bot started speaking")
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 self.is_speaking = False
-                call_logger.debug("Bot stopped speaking")
-            elif isinstance(frame, TranscriptionFrame):
-                if frame.user_id == "user":
-                    call_history.append(f"[User] {frame.text}")
-            elif isinstance(frame, LLMContextFrame):
-                for msg in reversed(frame.context.messages):
-                    if msg.get("role") == "assistant" and msg.get("content"):
-                        call_history.append(f"[Bot] {msg['content']}")
-                        break
+            await self.push_frame(frame, direction)
 
     speech_tracker = SpeechTracker()
 
-    async def await_bot_silence(timeout=4.0):
-        """Waits for the bot to stop speaking, with a timeout to avoid pipeline hangs."""
-        start = asyncio.get_event_loop().time()
-        while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start) < timeout:
-            await asyncio.sleep(0.1)
-
     async def wait_and_terminate():
-        call_logger.info("wait_and_terminate started: waiting for audio to finish.")
+        logger.info("wait_and_terminate started: waiting for audio to finish.")
         await asyncio.sleep(1.0)
         max_wait = 30.0
         start_time = asyncio.get_event_loop().time()
         while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
             await asyncio.sleep(0.1)
-        call_logger.info("Bot finished speaking. Waiting 0.5s for network flush...")
+        logger.info("Bot finished speaking. Waiting 0.5s for network flush...")
         await asyncio.sleep(0.5)
-        call_logger.info("Terminating pipeline with CancelTaskFrame.")
+        logger.info("Terminating pipeline with CancelTaskFrame.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def hang_up(params: FunctionCallParams):
         call_sid = call_data["call_id"]
-        call_logger.info(f"Bot is ending the call {call_sid} via end_call tool")
+        logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
         asyncio.create_task(wait_and_terminate())
 
@@ -403,32 +364,24 @@ async def websocket_endpoint(websocket: WebSocket):
         observation = params.arguments.get("observation")
         webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         if not webhook_url:
-            call_logger.error("SLACK_WEBHOOK_URL not found in environment")
-            await params.result_callback({"status": "error"})
+            logger.error("SLACK_WEBHOOK_URL not found in environment")
+            await params.result_callback({"status": "error", "message": "Slack webhook not configured"})
             return
-        
         payload = {"message": f"Knowledge Base Gap Reported:\n{observation}"}
-        # Fire and forget the network call
-        asyncio.create_task(httpx.AsyncClient(timeout=4.5).post(webhook_url, json=payload))
-        call_logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
-
-        # Hybrid Speech-Aware Logic:
-        # If the bot is already speaking (Parallel mode), wait for it to finish 
-        # before returning the result to prevent a speculative turn restart.
-        # Use an instructional result to steer the model away from "goodbyes".
-        was_speaking = speech_tracker.is_speaking
-        if was_speaking:
-            await await_bot_silence()
-        
-        await params.result_callback({
-            "status": "success",
-            "feedback": "Internal observation logged. Instruction: DO NOT mention this log to the caller. Proceed with your current response naturally."
-        })
+        try:
+            async with httpx.AsyncClient(timeout=4.5) as client:
+                response = await client.post(webhook_url, json=payload)
+                response.raise_for_status()
+            logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
+            await params.result_callback({"status": "success", "message": "Observation logged for review. Continue the conversation naturally."})
+        except Exception as e:
+            logger.error(f"Failed to notify Slack: {e}")
+            await params.result_callback({"status": "error", "message": str(e)})
 
     async def transfer_call_handler(args: FunctionCallParams):
         phone_number = args.arguments.get("phone_number")
         contact_name = args.arguments.get("contact_name", "a volunteer")
-        call_logger.info(f"Transferring call for {call_data['call_id']} to {contact_name} at {phone_number}")
+        logger.info(f"Transferring call for {call_data['call_id']} to {contact_name} at {phone_number}")
         
         pending_transfers[call_data["call_id"]] = {
             "number": phone_number,
@@ -439,7 +392,7 @@ async def websocket_endpoint(websocket: WebSocket):
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
-        call_logger.info(f"Bot requesting CiviCRM lookup for: {contact_name}")
+        logger.info(f"Bot requesting CiviCRM lookup for: {contact_name}")
         try:
             contacts = await asyncio.wait_for(civicrm_lookup.lookup_contact_by_name(contact_name), timeout=4.5)
             if len(contacts) == 1 and len(contacts[0]["phones"]) == 1:
@@ -538,14 +491,7 @@ async def websocket_endpoint(websocket: WebSocket):
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
-    pipeline = Pipeline([
-        transport.input(),
-        user_aggregator,
-        llm,
-        speech_tracker,
-        transport.output(),
-        assistant_aggregator
-    ])
+    pipeline = Pipeline([transport.input(), user_aggregator, llm, speech_tracker, transport.output(), assistant_aggregator])
 
     task = PipelineTask(pipeline, params=PipelineParams(audio_in_sample_rate=8000, audio_out_sample_rate=8000, enable_metrics=True, enable_usage_metrics=True))
 
@@ -602,47 +548,27 @@ async def websocket_endpoint(websocket: WebSocket):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        call_logger.info(f"Client disconnected for call {call_data['call_id']}")
+        logger.info(f"Client disconnected: {client}")
         warning_task.cancel()
-        
-        # Dump full conversation history to the log at the end
-        call_logger.debug("--- FINAL TRANSCRIPT ---")
-        for entry in call_history:
-            call_logger.debug(entry)
-        call_logger.debug("--- END TRANSCRIPT ---")
-
         if caller_contact_id:
             transcript = ""
             for msg in context.messages:
-                # Ensure we handle messages without content safely
-                if msg.get("role") not in ["system", "developer"] and msg.get("content"):
+                if msg.get("role") not in ["system", "developer"]:
                     transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
             if transcript:
                 await civicrm_agent.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}")
-        
-        # Clean up per-call log sink
-        logger.remove(handler_id)
         await task.cancel()
 
-    @llm.event_handler("on_error")
-    async def on_llm_error(service, error):
-        # Force a pipeline exit on fatal service errors to avoid silent hangs
-        call_logger.error(f"LLM Service Error: {error}")
-        await task.queue_frames([EndFrame()])
-
-    with logger.contextualize(call_id=call_sid):
-        runner = PipelineRunner(handle_sigint=True)
+    runner = PipelineRunner(handle_sigint=True)
+    try:
+        await runner.run(task)
+    except Exception as e:
+        logger.error(f"Error running pipeline: {e}")
+    finally:
         try:
-            await runner.run(task)
-        except Exception as e:
-            call_logger.error(f"Error running pipeline: {e}")
-            # Ensure the call doesn't stay open in silence on crash
-            await task.queue_frames([EndFrame()])
-        finally:
-            try:
-                await websocket.close()
-            except RuntimeError:
-                pass
+            await websocket.close()
+        except RuntimeError:
+            pass
 
 if __name__ == "__main__":
     import uvicorn
