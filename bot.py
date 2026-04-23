@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
 import asyncio
+import random
 import httpx
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, Response
@@ -178,6 +179,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
     transport_type, call_data = await parse_telephony_websocket(websocket)
     call_sid = call_data["call_id"]
+    # Choose a random voice for this call
+    VOICES = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"]
+    selected_voice = random.choice(VOICES)
     
     # Set up per-call logging
     Path("logs").mkdir(exist_ok=True)
@@ -189,7 +193,7 @@ async def websocket_endpoint(websocket: WebSocket):
         level="DEBUG" # Keep debug on for call files to catch jitter
     )
     call_logger = logger.bind(call_id=call_sid)
-    call_logger.info(f"Accepted {transport_type} call: {call_data}")
+    call_logger.info(f"Accepted {transport_type} call: {call_data} (Voice: {selected_voice})")
     
     caller_number = call_data.get("body", {}).get("caller_number", "Unknown Caller")
     destination_number = call_data.get("body", {}).get("destination_number", "Unknown")
@@ -343,7 +347,7 @@ async def websocket_endpoint(websocket: WebSocket):
         settings=GeminiLiveLLMService.Settings(
             model=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT,
-            voice="Charon",
+            voice=selected_voice,
             vad=GeminiVADParams(
                 start_sensitivity="START_SENSITIVITY_LOW"
             )
