@@ -8,6 +8,8 @@ import httpx
 from fastapi import FastAPI, WebSocket, Request
 from fastapi.responses import HTMLResponse, Response
 from loguru import logger
+logger.remove()
+logger.add(sys.stderr, level="INFO")
 from dotenv import load_dotenv
 import uvloop
 uvloop.install()
@@ -197,7 +199,8 @@ async def websocket_endpoint(websocket: WebSocket):
             audio_out_enabled=True,
             add_wav_header=False,
             serializer=serializer,
-            fixed_audio_packet_size=320
+            fixed_audio_packet_size=320,
+            audio_out_can_send_silence=True
         )
     )
 
