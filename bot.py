@@ -180,6 +180,7 @@ async def websocket_endpoint(websocket: WebSocket):
     call_sid = call_data["call_id"]
     
     # Set up per-call logging
+    Path("logs").mkdir(exist_ok=True)
     log_file = f"logs/call_{call_sid}.log"
     handler_id = logger.add(
         log_file, 
