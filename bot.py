@@ -570,9 +570,16 @@ async def websocket_endpoint(websocket: WebSocket):
             caller_contact_id = contact_info["contact_id"]
             name = contact_info["name"]
             
-            # Fetch full profile for the prompt
-            membership = await civicrm_agent.get_membership_info(caller_contact_id)
-            contact_details = await civicrm_agent.list_contact_info(caller_contact_id)
+            # Fetch full profile in parallel to reduce handshake latency
+            membership, contact_details = await asyncio.gather(
+                civicrm_agent.get_membership_info(caller_contact_id),
+                civicrm_agent.list_contact_info(caller_contact_id),
+                return_exceptions=True
+            )
+            
+            # Handle potential exceptions gracefully
+            membership = str(membership) if not isinstance(membership, Exception) else "Membership data unavailable."
+            contact_details = str(contact_details) if not isinstance(contact_details, Exception) else "Contact details unavailable."
             
             detail_block = f"CURRENT CALLER INFO: Recognized as {name} (ID: {caller_contact_id}).\n\n{membership}\n\n{contact_details}"
             greeting = f"'Hi {name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
