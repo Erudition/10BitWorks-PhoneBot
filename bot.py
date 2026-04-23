@@ -122,13 +122,41 @@ async def post_bot(request: Request):
     form_data = await request.form()
     call_sid = form_data.get("CallSid")
     
+    transfer_data = pending_transfers.pop(call_sid, None)
+    if transfer_data:
+        target_number = transfer_data.get("number")
+        target_name = transfer_data.get("name")
+        
+        # Get caller info to send the 'answer' event to Zammad
+        call_info = active_calls.get(call_sid, {})
+        from_num = call_info.get("from", "Unknown")
+        
+        logger.info(f"Executing transfer for {call_sid} to {target_name} ({target_number})")
+        
+        # Clean up any lingering hangup request just in case
+        if call_sid in pending_hangups:
+            pending_hangups.remove(call_sid)
+            
+        # Push 'answer' to Zammad with the new target person's name
+        asyncio.create_task(zammad_cti.push_cti_event(
+            event="answer",
+            from_number=from_num,
+            to_number=target_number,
+            direction="in",
+            call_id=call_sid,
+            user_name=target_name
+        ))
+        
+        twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
+        <Response>
+            <Dial>{target_number}</Dial>
+        </Response>"""
+        return Response(content=twiml_response, media_type="application/xml")
+        
     if call_sid in pending_hangups:
         logger.info(f"Executing hangup for {call_sid}")
         pending_hangups.remove(call_sid)
         return Response(content='<Response><Hangup/></Response>', media_type="application/xml")
-    
-    transfer_data = pending_transfers.pop(call_sid, None)
-    if transfer_data:
         target_number = transfer_data["number"]
         target_name = transfer_data["name"]
         
@@ -384,7 +412,8 @@ async def websocket_endpoint(websocket: WebSocket):
             await self.push_frame(frame, direction)
 
     speech_tracker = SpeechTracker()
-
+    is_terminating = False # Prevent double-termination race conditions
+    
     async def await_bot_silence(timeout=4.0):
         """Waits for the bot to stop speaking, with a timeout to avoid pipeline hangs."""
         start = asyncio.get_event_loop().time()
@@ -420,10 +449,13 @@ async def websocket_endpoint(websocket: WebSocket):
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
     async def hang_up(params: FunctionCallParams):
+        nonlocal is_terminating
         call_sid = call_data["call_id"]
         call_logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
-        asyncio.create_task(wait_and_terminate())
+        if not is_terminating:
+            is_terminating = True
+            asyncio.create_task(wait_and_terminate())
         # Return success immediately so the bot can say its final goodbye turn
         return {"status": "hangup_initiated", "instruction": "You are now hanging up. Say a brief and polite goodbye to the user now before the connection is severed."}
 
@@ -454,17 +486,26 @@ async def websocket_endpoint(websocket: WebSocket):
         })
 
     async def transfer_call_handler(args: FunctionCallParams):
+        nonlocal is_terminating
         phone_number = args.arguments.get("phone_number")
         contact_name = args.arguments.get("contact_name", "a volunteer")
         call_logger.info(f"Transferring call for {call_data['call_id']} to {contact_name} at {phone_number}")
         
-        pending_transfers[call_data["call_id"]] = {
+        call_sid = call_data["call_id"]
+        pending_transfers[call_sid] = {
             "number": phone_number,
             "name": contact_name
         }
+        # A transfer overrides a hangup. Clean up any accidental hangup requests from the LLM.
+        if call_sid in pending_hangups:
+            pending_hangups.remove(call_sid)
+            
         # Start snappy termination task and return success for a farewell
-        asyncio.create_task(wait_and_terminate())
-        return {"status": "transfer_initiated", "instruction": f"You are now transferring the call to {contact_name}. Briefly inform the user that you are connecting them now."}
+        if not is_terminating:
+            is_terminating = True
+            asyncio.create_task(wait_and_terminate())
+            
+        return {"status": "transfer_initiated", "instruction": f"You are now transferring the call to {contact_name}. Briefly inform the user that you are connecting them now. CRITICAL: Do NOT call the end_call tool yourself; the system handles the hangup naturally after the transfer."}
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
@@ -685,30 +726,36 @@ async def websocket_endpoint(websocket: WebSocket):
                     if email:
                         customer_id = email
                     
-                    try:
-                        ticket = await zammad_agent.create_ticket(
-                            title=f"Call Transcript: {caller_number}",
-                            body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
-                            customer=customer_id,
-                            owner="10bot@10bitworks.org",
-                            article_type="phone"
-                        )
-                        call_logger.info(f"Created Zammad ticket {ticket.get('id')} for recognized caller {customer_id}")
-                    except Exception as e:
-                        call_logger.error(f"Failed to create Zammad ticket for recognized caller: {e}")
-                else:
-                    # For unrecognized callers, create ticket assigned to 10bot
-                    try:
-                        ticket = await zammad_agent.create_ticket(
-                            title=f"Call Transcript (Unrecognized): {caller_number}",
-                            body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
-                            customer="10bot@10bitworks.org",
-                            owner="10bot@10bitworks.org",
-                            article_type="phone"
-                        )
-                        call_logger.info(f"Created Zammad ticket {ticket.get('id')} for unrecognized caller")
-                    except Exception as e:
-                        call_logger.error(f"Failed to create Zammad ticket for unrecognized caller: {e}")
+                        try:
+                            ticket = await zammad_agent.create_ticket(
+                                title=f"Call Transcript: {caller_number}",
+                                body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
+                                customer=customer_id,
+                                owner="10bot@10bitworks.org",
+                                article_type="phone"
+                            )
+                            if ticket:
+                                call_logger.info(f"Created Zammad ticket {ticket.get('id')} for recognized caller {customer_id}")
+                            else:
+                                call_logger.warning("Zammad ticket creation returned None.")
+                        except Exception as e:
+                            call_logger.error(f"Failed to create Zammad ticket for recognized caller: {e}")
+                    else:
+                        # For unrecognized callers, create ticket assigned to 10bot
+                        try:
+                            ticket = await zammad_agent.create_ticket(
+                                title=f"Call Transcript (Unrecognized): {caller_number}",
+                                body=f"Full transcript of call from {caller_number}:\n\n{transcript if transcript else 'No conversational dialogue recorded.'}",
+                                customer="10bot@10bitworks.org",
+                                owner="10bot@10bitworks.org",
+                                article_type="phone"
+                            )
+                            if ticket:
+                                call_logger.info(f"Created Zammad ticket {ticket.get('id')} for unrecognized caller")
+                            else:
+                                call_logger.warning("Zammad ticket creation returned None.")
+                        except Exception as e:
+                            call_logger.error(f"Failed to create Zammad ticket for unrecognized caller: {e}")
             except Exception as e:
                 call_logger.error(f"Critical error in post-call processing: {e}")
             
