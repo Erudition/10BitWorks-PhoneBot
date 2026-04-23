@@ -342,10 +342,7 @@ async def websocket_endpoint(websocket: WebSocket):
         settings=GeminiLiveLLMService.Settings(
             model=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT,
-            voice="Charon",
-            vad=GeminiVADParams(
-                start_sensitivity="START_SENSITIVITY_LOW"
-            )
+            voice="Charon"
         ),
         tools=tools,
         reconnect_on_error=False
@@ -602,8 +599,10 @@ async def websocket_endpoint(websocket: WebSocket):
         ))
 
         context.add_message(
-            {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
+            {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nCRITICAL INSTRUCTION: You MUST start the conversation immediately by saying EXACTLY this: {greeting}"}
         )
+        # Add a tiny delay to ensure Gemini is ready to receive the Run frame after connection
+        await asyncio.sleep(0.5)
         await task.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
