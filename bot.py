@@ -19,11 +19,12 @@ os.makedirs("logs", exist_ok=True)
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties, TextFrame, AudioRawFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties, TextFrame, AudioRawFrame, LLMContextFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService, GeminiVADParams
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.services.llm_service import FunctionCallParams
@@ -339,6 +340,9 @@ async def websocket_endpoint(websocket: WebSocket):
             model=MODEL_NAME,
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
+            vad=GeminiVADParams(
+                start_sensitivity="low"
+            )
         ),
         tools=tools,
         reconnect_on_error=False
@@ -361,11 +365,12 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Log both user and bot transcriptions
                 role = "User" if frame.user_id == "user" else "Bot"
                 call_logger.debug(f"[Transcription:{role}] [{frame.text}]")
-            elif isinstance(frame, TextFrame):
-                call_logger.debug(f"[Transcription:Bot] {frame.text}")
-            elif not isinstance(frame, AudioRawFrame):
-                 # Temporary debug to find the bot transcript frame
-                 call_logger.debug(f"[Pipeline Frame:Bot Side] {type(frame).__name__}")
+            elif isinstance(frame, LLMContextFrame):
+                # Extract the bot's response from the context update at the end of a turn
+                for msg in reversed(frame.context.messages):
+                    if msg.get("role") == "assistant" and msg.get("content"):
+                        call_logger.debug(f"[Transcription:Bot] {msg['content']}")
+                        break
             await self.push_frame(frame, direction)
 
     speech_tracker = SpeechTracker()
