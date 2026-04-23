@@ -341,7 +341,7 @@ async def websocket_endpoint(websocket: WebSocket):
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
             vad=GeminiVADParams(
-                start_sensitivity="low"
+                start_sensitivity="START_SENSITIVITY_LOW"
             )
         ),
         tools=tools,
@@ -570,9 +570,16 @@ async def websocket_endpoint(websocket: WebSocket):
             caller_contact_id = contact_info["contact_id"]
             name = contact_info["name"]
             
-            # Fetch full profile for the prompt
-            membership = await civicrm_agent.get_membership_info(caller_contact_id)
-            contact_details = await civicrm_agent.list_contact_info(caller_contact_id)
+            # Fetch full profile in parallel to reduce handshake latency
+            membership, contact_details = await asyncio.gather(
+                civicrm_agent.get_membership_info(caller_contact_id),
+                civicrm_agent.list_contact_info(caller_contact_id),
+                return_exceptions=True
+            )
+            
+            # Handle potential exceptions gracefully
+            membership = str(membership) if not isinstance(membership, Exception) else "Membership data unavailable."
+            contact_details = str(contact_details) if not isinstance(contact_details, Exception) else "Contact details unavailable."
             
             detail_block = f"CURRENT CALLER INFO: Recognized as {name} (ID: {caller_contact_id}).\n\n{membership}\n\n{contact_details}"
             greeting = f"'Hi {name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
@@ -617,12 +624,20 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.remove(handler_id)
         await task.cancel()
 
+    @llm.event_handler("on_error")
+    async def on_llm_error(service, error):
+        # Force a pipeline exit on fatal service errors to avoid silent hangs
+        call_logger.error(f"LLM Service Error: {error}")
+        await task.queue_frames([EndFrame()])
+
     with logger.contextualize(call_id=call_sid):
         runner = PipelineRunner(handle_sigint=True)
         try:
             await runner.run(task)
         except Exception as e:
             call_logger.error(f"Error running pipeline: {e}")
+            # Ensure the call doesn't stay open in silence on crash
+            await task.queue_frames([EndFrame()])
         finally:
             try:
                 await websocket.close()
