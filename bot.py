@@ -392,14 +392,30 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.sleep(0.1)
 
     async def wait_and_terminate():
-        call_logger.info("wait_and_terminate started: waiting for audio to finish.")
-        await asyncio.sleep(1.0)
-        max_wait = 30.0
-        start_time = asyncio.get_event_loop().time()
-        while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_time) < max_wait:
-            await asyncio.sleep(0.1)
-        call_logger.info("Bot finished speaking.")
-        # await asyncio.sleep(0.5)
+        call_logger.info("wait_and_terminate started: monitoring for final speech.")
+        
+        # 1. Wait for bot to START speaking (the "Goodbye" turn)
+        # We look for the transition into speaking state.
+        start_wait = asyncio.get_event_loop().time()
+        max_start_wait = 5.0 # Max time to wait for the LLM to start its final turn
+        
+        while not speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start_wait) < max_start_wait:
+            await asyncio.sleep(0.05)
+            
+        if speech_tracker.is_speaking:
+            call_logger.info("Final speech detected. Waiting for bot to finish...")
+            # 2. Wait for bot to FINISH speaking
+            max_speech_wait = 20.0
+            speech_start = asyncio.get_event_loop().time()
+            while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - speech_start) < max_speech_wait:
+                await asyncio.sleep(0.05)
+            call_logger.info("Final speech finished.")
+        else:
+            call_logger.warning("Timed out waiting for final speech to start. Terminating anyway.")
+
+        # 3. Small flush window (0.2s) to ensure final packet hits the OS buffer
+        await asyncio.sleep(0.2)
+        
         call_logger.info("Terminating pipeline with CancelTaskFrame.")
         await llm.push_frame(CancelTaskFrame(), FrameDirection.UPSTREAM)
 
@@ -408,6 +424,8 @@ async def websocket_endpoint(websocket: WebSocket):
         call_logger.info(f"Bot is ending the call {call_sid} via end_call tool")
         pending_hangups.add(call_sid)
         asyncio.create_task(wait_and_terminate())
+        # Return success immediately so the bot can say its final goodbye turn
+        return {"status": "hangup_initiated", "instruction": "You are now hanging up. Say a brief and polite goodbye to the user now before the connection is severed."}
 
     async def notify_slack(params: FunctionCallParams):
         observation = params.arguments.get("observation")
@@ -444,8 +462,9 @@ async def websocket_endpoint(websocket: WebSocket):
             "number": phone_number,
             "name": contact_name
         }
-        await task.queue_frames([EndFrame()])
-        return {"status": "transfer_initiated"}
+        # Start snappy termination task and return success for a farewell
+        asyncio.create_task(wait_and_terminate())
+        return {"status": "transfer_initiated", "instruction": f"You are now transferring the call to {contact_name}. Briefly inform the user that you are connecting them now."}
 
     async def lookup_contact_handler(params: FunctionCallParams):
         contact_name = params.arguments.get("contact_name")
