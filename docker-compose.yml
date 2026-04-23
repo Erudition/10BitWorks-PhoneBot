@@ -3,6 +3,7 @@ version: "3.8"
 services:
   phone-bot:
     build: .
+    container_name: ${CONTAINER_NAME:-phone-assistant}
     ports:
       - "${HOST_PORT:-17293}:8000"
     env_file:
