@@ -613,7 +613,7 @@ async def websocket_endpoint(websocket: WebSocket):
         ))
 
         context.add_message(
-            {"role": "developer", "content": f"SYSTEM INFO: You are {selected_voice}. The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
+            {"role": "developer", "content": f"SYSTEM INFO: Your name is {selected_voice}. The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
         )
         await task.queue_frames([LLMRunFrame()])
 
