@@ -23,7 +23,7 @@ This file documents critical architectural decisions, workarounds, and gotchas d
 ## 3. Twilio Audio Pacing and Stability
 *   **Strict 20ms Pacing**: Twilio Media Streams expect 8kHz, 16-bit mono audio (320 bytes = 20ms chunks). Use Pipecat's **`fixed_audio_packet_size=320`** setting in `FastAPIWebsocketParams`. This ensures perfectly timed packets without the overhead of higher-level chunking.
 *   **Avoid Chunks and Schedulers**: Do **NOT** use `audio_out_10ms_chunks`, `FixedSizeScheduler`, or `prefatory_silence_threshold`. These can interfere with the native framing and cause "clicking" or "speed-run" distorted audio.
-*   **Avoid Infinite Silence**: Do NOT set `audio_out_can_send_silence=True`. While it keeps the stream synchronized, Pipecat will dump infinite silence into the buffer while the LLM is "thinking", causing massive (multi-second) delays before the bot's actual speech is heard.
+*   **Avoid Infinite Silence**: Do NOT set `audio_out_can_send_silence=True`. While intended to keep the stream synchronized, it was proven to cause **massive audio dropouts and multi-second delays**. The "extra" silence frames compete with real audio frames at the Twilio gateway and interfere with the jitter buffer. `uvloop` provides enough performance to maintain 20ms pacing without this dangerous hack.
 
 ## 4. Graceful Shutdown & The 30-Second Gemini Bug
 *   **The Bug**: Gemini 3.1 Live defers the processing of `EndFrame` for 30 seconds after the bot finishes speaking, which causes the Twilio call to hang in silence if a standard `EndTaskFrame` is used.
