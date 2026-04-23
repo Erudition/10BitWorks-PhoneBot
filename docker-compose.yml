@@ -3,9 +3,9 @@ version: "3.8"
 services:
   phone-bot:
     build: .
-    container_name: phone-assistant
+    container_name: ${CONTAINER_NAME:-phone-assistant}
     ports:
-      - "17293:8000"
+      - "${HOST_PORT:-17293}:8000"
     env_file:
       - stack.env
     restart: unless-stopped
