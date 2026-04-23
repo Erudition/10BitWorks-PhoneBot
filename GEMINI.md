@@ -9,8 +9,8 @@ This file documents critical architectural decisions, workarounds, and gotchas d
     *   *Handshake Warning*: Do **NOT** use `llm.update_settings()` during the `on_client_connected` event; it triggers a session reset that causes the bot to remain silent.
     *   *Role Mapping*: Note that Pipecat maps the `developer` role to the `user` role in the Gemini Live history. To prevent the model from thinking the *caller* is providing these instructions, always prefix the message text with `SYSTEM INFO:` or `INSTRUCTION:`.
 *   **Tool Result Insertion & Hallucination Prevention**: Pushing tool results (via `params.result_callback`) while the bot is actively speaking often triggers Gemini to perform a "speculative turn," which frequently results in hallucinatory "goodbyes" or hangups being tacked onto valid responses.
-    *   *Requirement*: Tool handlers for non-blocking actions (like logging or background tasks) MUST wait for `speech_tracker.is_speaking` to be `False` (or hit a safety timeout) before returning the result.
-    *   *Requirement*: Keep result payloads minimal/neutral (e.g., `{"recorded": True}`) to avoid providing "hook" text that triggers conversational responses.
+    *   *Requirement*: Tool handlers for non-blocking actions (like logging or background tasks) MUST return an empty result `{}` immediately and set `properties=FunctionCallResultProperties(run_llm=False)` to prevent the turn transition.
+    *   *Requirement*: Dispatch the actual logic (network calls, etc.) to a background task (`asyncio.create_task`) AFTER calling the result callback.
 
 ## 2. Tool Calling with Gemini 3.1 Live
 *   **No Asynchronous Function Calling**: Gemini 3.1 Flash Live Preview does **not** currently support native asynchronous tool calling.
