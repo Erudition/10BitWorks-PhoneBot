@@ -44,9 +44,16 @@ async def create_ticket(title: str, body: str, customer: str, group_id: int = 1,
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(f"{base_url}/tickets", headers=headers, json=payload)
+            
+            # Catch '422 Unprocessable Content' which often means the customer email is missing in Zammad
+            if resp.status_code == 422 and customer != "10bot@10bitworks.org":
+                logger.warning(f"Zammad customer '{customer}' not found (422). Retrying with fallback 10bot@10bitworks.org")
+                payload["customer"] = "10bot@10bitworks.org"
+                resp = await client.post(f"{base_url}/tickets", headers=headers, json=payload)
+            
             resp.raise_for_status()
             result = resp.json()
-            logger.info(f"Zammad ticket created successfully: #{result.get('number')} for {customer} (Owner: {owner})")
+            logger.info(f"Zammad ticket created successfully: #{result.get('number')} for {payload['customer']} (Owner: {owner})")
             return result
     except Exception as e:
         logger.error(f"Failed to create Zammad ticket for {customer}: {e}")
