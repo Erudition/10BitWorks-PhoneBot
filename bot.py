@@ -623,6 +623,8 @@ async def websocket_endpoint(websocket: WebSocket):
             await runner.run(task)
         except Exception as e:
             call_logger.error(f"Error running pipeline: {e}")
+            # Ensure the call doesn't stay open in silence on crash
+            await task.queue_frames([EndFrame()])
         finally:
             try:
                 await websocket.close()
