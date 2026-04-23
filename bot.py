@@ -363,6 +363,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     speech_tracker = SpeechTracker()
 
+    async def await_bot_silence(timeout=4.0):
+        """Waits for the bot to stop speaking, with a timeout to avoid pipeline hangs."""
+        start = asyncio.get_event_loop().time()
+        while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start) < timeout:
+            await asyncio.sleep(0.1)
+
     async def wait_and_terminate():
         call_logger.info("wait_and_terminate started: waiting for audio to finish.")
         await asyncio.sleep(1.0)
@@ -382,19 +388,23 @@ async def websocket_endpoint(websocket: WebSocket):
         asyncio.create_task(wait_and_terminate())
 
     async def notify_slack(params: FunctionCallParams):
-        # 1. Satisfy the LLM INSTANTLY before it even starts generating audio
-        await params.result_callback({})
-
-        # 2. Perform the work in the background
         observation = params.arguments.get("observation")
         webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         if not webhook_url:
             call_logger.error("SLACK_WEBHOOK_URL not found in environment")
+            await params.result_callback({"status": "error"})
             return
         
         payload = {"message": f"Knowledge Base Gap Reported:\n{observation}"}
+        # Fire and forget the network call
         asyncio.create_task(httpx.AsyncClient(timeout=4.5).post(webhook_url, json=payload))
         call_logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
+
+        # CRITICAL: Wait for bot to finish current phrase before returning result
+        # Since the result is {}, Gemini will see the tool turn is closed
+        # but won't feel the need to start a 'hallucinated' second turn.
+        await await_bot_silence()
+        await params.result_callback({})
 
     async def transfer_call_handler(args: FunctionCallParams):
         phone_number = args.arguments.get("phone_number")
@@ -571,7 +581,8 @@ async def websocket_endpoint(websocket: WebSocket):
         if caller_contact_id:
             transcript = ""
             for msg in context.messages:
-                if msg.get("role") not in ["system", "developer"]:
+                # Ensure we handle messages without content safely
+                if msg.get("role") not in ["system", "developer"] and msg.get("content"):
                     transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
             if transcript:
                 await civicrm_agent.log_call_activity(caller_contact_id, "Inbound Call via 10Bot", f"Call Transcript:\n\n{transcript}")
