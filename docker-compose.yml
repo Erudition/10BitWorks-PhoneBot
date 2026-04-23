@@ -5,7 +5,7 @@ services:
     build: .
     container_name: ${CONTAINER_NAME:-phone-assistant}
     ports:
-      - "${HOST_PORT:-17293}:8000"
+      - "${PORT:-17293}:8000"
     env_file:
       - stack.env
     restart: unless-stopped
