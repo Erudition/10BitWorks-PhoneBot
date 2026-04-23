@@ -1,5 +1,15 @@
 # Phone Assistant Project Guidelines & Lessons Learned
 
+
+Any message I send you will contain one or more (but usually just one) of the following types of communication. The type determines what you may do in your next turn, in response to that piece of the message:
+1. CHAT: Asking a question about what you've done, asking about what's been said in the conversation, or making a correction to your statements.
+For this type of message from me, in your next turn you may NOT make any code changes or call any tools. Just answer.
+2. INVESTIGATION: Asking a question about the code, the logs, system status - or making an observational statement that contradicts your perspective, reporting a failure, etc.
+For this type of message from me, in your next turn you may NOT make code changes, and you may ONLY call read-only tools and commands that do not affect the state of the system in any way.
+3. INSTRUCTION: Telling you to do something like implement a plan, change git branches, run tests, etc.
+For this type of message from me, in your next turn you may ONLY call tools and commands that modify system state that are strictly within the scope of the agreed plan - you may NOT decide to autonomously implement a workaround, or act based on guesses when the plan isn't working out. If you can't do it the way you said or implied you would, report back and wait for approval of your new plan.
+
+
 This file documents critical architectural decisions, workarounds, and gotchas discovered during the development of the 10BitWorks Phone Assistant using Pipecat, Twilio, and the Gemini 3.1 Live API. Future agents modifying this codebase must adhere to these guidelines to prevent regressions.
 
 ## 1. Gemini 3.1 Live Integration Constraints
@@ -8,9 +18,12 @@ This file documents critical architectural decisions, workarounds, and gotchas d
 *   **Dynamic Prompting (Date/Time)**: Inject dynamic data (like the current time) into the initial **`developer`** role message using `context.add_message()`. 
     *   *Handshake Warning*: Do **NOT** use `llm.update_settings()` during the `on_client_connected` event; it triggers a session reset that causes the bot to remain silent.
     *   *Role Mapping*: Note that Pipecat maps the `developer` role to the `user` role in the Gemini Live history. To prevent the model from thinking the *caller* is providing these instructions, always prefix the message text with `SYSTEM INFO:` or `INSTRUCTION:`.
-*   **Tool Result Insertion & Hallucination Prevention**: Pushing tool results (via `params.result_callback`) while the bot is actively speaking often triggers Gemini to perform a "speculative turn," which frequently results in hallucinatory "goodbyes" or hangups being tacked onto valid responses.
-    *   *Requirement*: Tool handlers for non-blocking actions (like logging or background tasks) MUST return an empty result `{}` immediately and set `properties=FunctionCallResultProperties(run_llm=False)` to prevent the turn transition.
-    *   *Requirement*: Dispatch the actual logic (network calls, etc.) to a background task (`asyncio.create_task`) AFTER calling the result callback.
+*   **Tool Result Insertion (The Sync Deadlock)**: Gemini 3.1 Live is a stateful WebSocket protocol. Once a `functionCall` is emitted, the Google server-side state machine **blocks** until it receives a `functionResponse`.
+    *   *Requirement*: You MUST always return a tool result to the LLM. 
+    *   *Warning*: Do **NOT** use `run_llm=False` for tool results in this project. It prevents Pipecat from sending the mandatory response to Google, which causes the bot to hang in silence indefinitely.
+*   **Parallel vs. Sequential Tool Calls**: Gemini may emit tool calls **simultaneously** with audio (Parallel mode) or **before** audio (Sequential mode). 
+    *   *Hallucination Risk*: If a tool result arrives while the bot is already speaking its Parallel-mode answer, Gemini re-analyzes the context and often "restarts" its turn, tacking on hallucinated goodbyes or hangups.
+    *   *Requirement*: Tracking/Background tools must use the **Hybrid Speech-Aware Strategy**: Wait for the bot to finish speaking before returning the result if it's already in a turn, but return immediately if it's waiting for the data.
 
 ## 2. Tool Calling with Gemini 3.1 Live
 *   **No Asynchronous Function Calling**: Gemini 3.1 Flash Live Preview does **not** currently support native asynchronous tool calling.

@@ -19,7 +19,7 @@ os.makedirs("logs", exist_ok=True)
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties
+from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties, TextFrame, AudioRawFrame, VADThresholdFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -353,12 +353,19 @@ async def websocket_endpoint(websocket: WebSocket):
             await super().process_frame(frame, direction)
             if isinstance(frame, BotStartedSpeakingFrame):
                 self.is_speaking = True
+                call_logger.debug("Bot started speaking")
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 self.is_speaking = False
+                call_logger.debug("Bot stopped speaking")
             elif isinstance(frame, TranscriptionFrame):
                 # Log both user and bot transcriptions
                 role = "User" if frame.user_id == "user" else "Bot"
                 call_logger.debug(f"[Transcription:{role}] [{frame.text}]")
+            elif isinstance(frame, TextFrame):
+                call_logger.debug(f"[Transcription:Bot] {frame.text}")
+            elif not isinstance(frame, (AudioRawFrame, VADThresholdFrame)):
+                 # Temporary debug to find the bot transcript frame
+                 call_logger.debug(f"[Pipeline Frame:Bot Side] {type(frame).__name__}")
             await self.push_frame(frame, direction)
 
     speech_tracker = SpeechTracker()
@@ -388,21 +395,30 @@ async def websocket_endpoint(websocket: WebSocket):
         asyncio.create_task(wait_and_terminate())
 
     async def notify_slack(params: FunctionCallParams):
-        # CRITICAL: Return an empty result with run_llm=False INSTANTLY.
-        # This closes the tool turn for Gemini but tells Pipecat NOT to 
-        # trigger a new conversational turn or analysis.
-        await params.result_callback({}, properties=FunctionCallResultProperties(run_llm=False))
-
-        # Perform work in background
         observation = params.arguments.get("observation")
         webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         if not webhook_url:
             call_logger.error("SLACK_WEBHOOK_URL not found in environment")
+            await params.result_callback({"status": "error"})
             return
         
         payload = {"message": f"Knowledge Base Gap Reported:\n{observation}"}
+        # Fire and forget the network call
         asyncio.create_task(httpx.AsyncClient(timeout=4.5).post(webhook_url, json=payload))
         call_logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
+
+        # Hybrid Speech-Aware Logic:
+        # If the bot is already speaking (Parallel mode), wait for it to finish 
+        # before returning the result to prevent a speculative turn restart.
+        # Use an instructional result to steer the model away from "goodbyes".
+        was_speaking = speech_tracker.is_speaking
+        if was_speaking:
+            await await_bot_silence()
+        
+        await params.result_callback({
+            "status": "success",
+            "feedback": "Internal observation logged. Instruction: DO NOT mention this log to the caller. Proceed with your current response naturally."
+        })
 
     async def transfer_call_handler(args: FunctionCallParams):
         phone_number = args.arguments.get("phone_number")
@@ -517,7 +533,14 @@ async def websocket_endpoint(websocket: WebSocket):
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(context)
 
-    pipeline = Pipeline([transport.input(), user_aggregator, llm, speech_tracker, transport.output(), assistant_aggregator])
+    pipeline = Pipeline([
+        transport.input(),
+        user_aggregator,
+        llm,
+        assistant_aggregator,
+        speech_tracker,
+        transport.output()
+    ])
 
     task = PipelineTask(pipeline, params=PipelineParams(audio_in_sample_rate=8000, audio_out_sample_rate=8000, enable_metrics=True, enable_usage_metrics=True))
 
