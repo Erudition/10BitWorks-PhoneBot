@@ -597,6 +597,7 @@ async def websocket_endpoint(websocket: WebSocket):
         context.add_message(
             {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
         )
+        await task.queue_frames([LLMRunFrame()])
 
     # Keep conversation history in memory and dump at the end to avoid blocking audio loop
     call_history = []
