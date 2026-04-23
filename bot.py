@@ -19,7 +19,7 @@ os.makedirs("logs", exist_ok=True)
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -388,23 +388,21 @@ async def websocket_endpoint(websocket: WebSocket):
         asyncio.create_task(wait_and_terminate())
 
     async def notify_slack(params: FunctionCallParams):
+        # CRITICAL: Return an empty result with run_llm=False INSTANTLY.
+        # This closes the tool turn for Gemini but tells Pipecat NOT to 
+        # trigger a new conversational turn or analysis.
+        await params.result_callback({}, properties=FunctionCallResultProperties(run_llm=False))
+
+        # Perform work in background
         observation = params.arguments.get("observation")
         webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         if not webhook_url:
             call_logger.error("SLACK_WEBHOOK_URL not found in environment")
-            await params.result_callback({"status": "error"})
             return
         
         payload = {"message": f"Knowledge Base Gap Reported:\n{observation}"}
-        # Fire and forget the network call
         asyncio.create_task(httpx.AsyncClient(timeout=4.5).post(webhook_url, json=payload))
         call_logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
-
-        # CRITICAL: Wait for bot to finish current phrase before returning result
-        # Since the result is {}, Gemini will see the tool turn is closed
-        # but won't feel the need to start a 'hallucinated' second turn.
-        await await_bot_silence()
-        await params.result_callback({})
 
     async def transfer_call_handler(args: FunctionCallParams):
         phone_number = args.arguments.get("phone_number")
