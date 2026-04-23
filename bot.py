@@ -23,6 +23,7 @@ from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTas
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.audio.schedulers.fixed_size_scheduler import FixedSizeScheduler
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService, GeminiVADParams
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
@@ -215,7 +216,8 @@ async def websocket_endpoint(websocket: WebSocket):
             add_wav_header=False,
             serializer=serializer,
             fixed_audio_packet_size=320,
-            audio_out_can_send_silence=False
+            audio_out_can_send_silence=False,
+            audio_out_scheduler=FixedSizeScheduler(chunk_size=320)
         )
     )
 
@@ -341,7 +343,8 @@ async def websocket_endpoint(websocket: WebSocket):
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
             vad=GeminiVADParams(
-                start_sensitivity="START_SENSITIVITY_LOW"
+                start_sensitivity="START_SENSITIVITY_LOW",
+                end_of_speech_sensitivity="START_SENSITIVITY_LOW"
             )
         ),
         tools=tools,
@@ -354,7 +357,7 @@ async def websocket_endpoint(websocket: WebSocket):
             self.is_speaking = False
 
         async def process_frame(self, frame: Frame, direction: FrameDirection):
-            await super().process_frame(frame, direction)
+            await self.push_frame(frame, direction)
             if isinstance(frame, BotStartedSpeakingFrame):
                 self.is_speaking = True
                 call_logger.debug("Bot started speaking")
@@ -362,16 +365,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 self.is_speaking = False
                 call_logger.debug("Bot stopped speaking")
             elif isinstance(frame, TranscriptionFrame):
-                # Log both user and bot transcriptions
                 role = "User" if frame.user_id == "user" else "Bot"
-                call_logger.debug(f"[Transcription:{role}] [{frame.text}]")
+                call_history.append(f"[{role}] {frame.text}")
             elif isinstance(frame, LLMContextFrame):
-                # Extract the bot's response from the context update at the end of a turn
                 for msg in reversed(frame.context.messages):
                     if msg.get("role") == "assistant" and msg.get("content"):
-                        call_logger.debug(f"[Transcription:Bot] {msg['content']}")
+                        curr_text = msg["content"]
+                        if not call_history or call_history[-1] != f"[Bot] {curr_text}":
+                            call_history.append(f"[Bot] {curr_text}")
                         break
-            await self.push_frame(frame, direction)
 
     speech_tracker = SpeechTracker()
 
@@ -570,16 +572,9 @@ async def websocket_endpoint(websocket: WebSocket):
             caller_contact_id = contact_info["contact_id"]
             name = contact_info["name"]
             
-            # Fetch full profile in parallel to reduce handshake latency
-            membership, contact_details = await asyncio.gather(
-                civicrm_agent.get_membership_info(caller_contact_id),
-                civicrm_agent.list_contact_info(caller_contact_id),
-                return_exceptions=True
-            )
-            
-            # Handle potential exceptions gracefully
-            membership = str(membership) if not isinstance(membership, Exception) else "Membership data unavailable."
-            contact_details = str(contact_details) if not isinstance(contact_details, Exception) else "Contact details unavailable."
+            # Fetch full profile for the prompt
+            membership = await civicrm_agent.get_membership_info(caller_contact_id)
+            contact_details = await civicrm_agent.list_contact_info(caller_contact_id)
             
             detail_block = f"CURRENT CALLER INFO: Recognized as {name} (ID: {caller_contact_id}).\n\n{membership}\n\n{contact_details}"
             greeting = f"'Hi {name}! Thank you for calling 10BitWorks, San Antonio's largest, member-supported, nonprofit makerspace! How can I help you today?'"
@@ -605,12 +600,21 @@ async def websocket_endpoint(websocket: WebSocket):
         context.add_message(
             {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
         )
-        await task.queue_frames([LLMRunFrame()])
+
+    # Keep conversation history in memory and dump at the end to avoid blocking audio loop
+    call_history = []
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         call_logger.info(f"Client disconnected for call {call_data['call_id']}")
         warning_task.cancel()
+        
+        # Dump full conversation history to the log at the end
+        call_logger.debug("--- FINAL TRANSCRIPT ---")
+        for entry in call_history:
+            call_logger.debug(entry)
+        call_logger.debug("--- END TRANSCRIPT ---")
+
         if caller_contact_id:
             transcript = ""
             for msg in context.messages:
