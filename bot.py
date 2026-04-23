@@ -355,6 +355,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 self.is_speaking = True
             elif isinstance(frame, BotStoppedSpeakingFrame):
                 self.is_speaking = False
+            elif isinstance(frame, TranscriptionFrame):
+                # Log both user and bot transcriptions
+                role = "User" if frame.user_id == "user" else "Bot"
+                call_logger.debug(f"[Transcription:{role}] [{frame.text}]")
             await self.push_frame(frame, direction)
 
     speech_tracker = SpeechTracker()
