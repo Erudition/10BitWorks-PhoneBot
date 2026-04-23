@@ -19,7 +19,7 @@ os.makedirs("logs", exist_ok=True)
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties, TextFrame, AudioRawFrame, VADThresholdFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties, TextFrame, AudioRawFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -363,7 +363,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 call_logger.debug(f"[Transcription:{role}] [{frame.text}]")
             elif isinstance(frame, TextFrame):
                 call_logger.debug(f"[Transcription:Bot] {frame.text}")
-            elif not isinstance(frame, (AudioRawFrame, VADThresholdFrame)):
+            elif not isinstance(frame, AudioRawFrame):
                  # Temporary debug to find the bot transcript frame
                  call_logger.debug(f"[Pipeline Frame:Bot Side] {type(frame).__name__}")
             await self.push_frame(frame, direction)
