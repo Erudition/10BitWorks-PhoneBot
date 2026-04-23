@@ -341,7 +341,7 @@ async def websocket_endpoint(websocket: WebSocket):
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
             vad=GeminiVADParams(
-                start_sensitivity="low"
+                start_sensitivity="LOW"
             )
         ),
         tools=tools,
