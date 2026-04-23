@@ -363,12 +363,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
     speech_tracker = SpeechTracker()
 
-    async def await_bot_silence(timeout=4.0):
-        """Waits for the bot to stop speaking, with a timeout to avoid pipeline hangs."""
-        start = asyncio.get_event_loop().time()
-        while speech_tracker.is_speaking and (asyncio.get_event_loop().time() - start) < timeout:
-            await asyncio.sleep(0.1)
-
     async def wait_and_terminate():
         call_logger.info("wait_and_terminate started: waiting for audio to finish.")
         await asyncio.sleep(1.0)
@@ -388,27 +382,19 @@ async def websocket_endpoint(websocket: WebSocket):
         asyncio.create_task(wait_and_terminate())
 
     async def notify_slack(params: FunctionCallParams):
+        # 1. Satisfy the LLM INSTANTLY before it even starts generating audio
+        await params.result_callback({})
+
+        # 2. Perform the work in the background
         observation = params.arguments.get("observation")
         webhook_url = os.getenv("SLACK_WEBHOOK_URL")
         if not webhook_url:
             call_logger.error("SLACK_WEBHOOK_URL not found in environment")
-            # Return result immediately on error to avoid hang
-            await params.result_callback({"status": "error"})
             return
         
         payload = {"message": f"Knowledge Base Gap Reported:\n{observation}"}
-        try:
-            # We don't await the network call – truly fire and forget
-            asyncio.create_task(httpx.AsyncClient(timeout=4.5).post(webhook_url, json=payload))
-            call_logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
-            
-            # CRITICAL: Wait for bot to finish current phrase before returning result
-            # to prevent it from 'tacking on' a speculative goodbye.
-            await await_bot_silence()
-            await params.result_callback({"recorded": True})
-        except Exception as e:
-            call_logger.error(f"Failed to notify Slack: {e}")
-            await params.result_callback({"status": "error"})
+        asyncio.create_task(httpx.AsyncClient(timeout=4.5).post(webhook_url, json=payload))
+        call_logger.info(f"Notified Slack about missing knowledge: {observation[:50]}...")
 
     async def transfer_call_handler(args: FunctionCallParams):
         phone_number = args.arguments.get("phone_number")
