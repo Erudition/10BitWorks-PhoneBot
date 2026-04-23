@@ -341,7 +341,7 @@ async def websocket_endpoint(websocket: WebSocket):
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
             vad=GeminiVADParams(
-                start_sensitivity="LOW"
+                start_sensitivity="START_SENSITIVITY_LOW"
             )
         ),
         tools=tools,
@@ -616,6 +616,12 @@ async def websocket_endpoint(websocket: WebSocket):
         # Clean up per-call log sink
         logger.remove(handler_id)
         await task.cancel()
+
+    @llm.event_handler("on_error")
+    async def on_llm_error(service, error):
+        # Force a pipeline exit on fatal service errors to avoid silent hangs
+        call_logger.error(f"LLM Service Error: {error}")
+        await task.queue_frames([EndFrame()])
 
     with logger.contextualize(call_id=call_sid):
         runner = PipelineRunner(handle_sigint=True)
