@@ -23,7 +23,6 @@ from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTas
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.audio.schedulers.fixed_size_scheduler import FixedSizeScheduler
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService, GeminiVADParams
 from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
@@ -216,8 +215,7 @@ async def websocket_endpoint(websocket: WebSocket):
             add_wav_header=False,
             serializer=serializer,
             fixed_audio_packet_size=320,
-            audio_out_can_send_silence=False,
-            audio_out_scheduler=FixedSizeScheduler(chunk_size=320)
+            audio_out_can_send_silence=False
         )
     )
 
@@ -343,8 +341,7 @@ async def websocket_endpoint(websocket: WebSocket):
             system_instruction=SYSTEM_PROMPT,
             voice="Charon",
             vad=GeminiVADParams(
-                start_sensitivity="START_SENSITIVITY_LOW",
-                end_of_speech_sensitivity="START_SENSITIVITY_LOW"
+                start_sensitivity="START_SENSITIVITY_LOW"
             )
         ),
         tools=tools,
