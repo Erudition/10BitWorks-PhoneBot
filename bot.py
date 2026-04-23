@@ -708,9 +708,27 @@ async def websocket_endpoint(websocket: WebSocket):
                 
                 # Generate transcript for logging/ticketing
                 transcript = ""
+                # Determine display name for the caller
+                display_user_name = caller_name if caller_name else "Caller"
+                
+                role_map = {
+                    "assistant": "Receptionist",
+                    "model": "Receptionist",
+                    "user": display_user_name
+                }
+
                 for msg in context.messages:
-                    if msg.get("role") not in ["system", "developer"] and msg.get("content"):
-                        transcript += f"**{msg['role'].capitalize()}**: {msg['content']}\n\n"
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    
+                    # Only include User and Assistant roles
+                    if role in role_map and content:
+                        # Filter out internal protocol JSON or async tool messages
+                        if content.strip().startswith("{") or "async_tool" in content:
+                            continue
+                            
+                        display_name = role_map[role]
+                        transcript += f"**{display_name}**: {content}\n\n"
 
                 if caller_contact_id:
                     if transcript:
