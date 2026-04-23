@@ -176,6 +176,9 @@ async def websocket_endpoint(websocket: WebSocket):
     transport_type, call_data = await parse_telephony_websocket(websocket)
     call_sid = call_data["call_id"]
     
+    # Keep conversation history in memory and dump at the end to avoid blocking audio loop
+    call_history = []
+
     # Set up per-call logging
     log_file = f"logs/call_{call_sid}.log"
     handler_id = logger.add(
@@ -362,14 +365,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 self.is_speaking = False
                 call_logger.debug("Bot stopped speaking")
             elif isinstance(frame, TranscriptionFrame):
-                role = "User" if frame.user_id == "user" else "Bot"
-                call_history.append(f"[{role}] {frame.text}")
+                # We primarily track the User here; Bot transcription comes better from the Context frame
+                if frame.user_id == "user":
+                    call_history.append(f"[User] {frame.text}")
             elif isinstance(frame, LLMContextFrame):
                 for msg in reversed(frame.context.messages):
                     if msg.get("role") == "assistant" and msg.get("content"):
                         curr_text = msg["content"]
-                        if not call_history or call_history[-1] != f"[Bot] {curr_text}":
-                            call_history.append(f"[Bot] {curr_text}")
+                        # Only append if this is a new or substantially updated turn
+                        if not call_history or not call_history[-1].startswith("[Bot]"):
+                             call_history.append(f"[Bot] {curr_text}")
+                        else:
+                             call_history[-1] = f"[Bot] {curr_text}"
                         break
 
     speech_tracker = SpeechTracker()
@@ -598,9 +605,6 @@ async def websocket_endpoint(websocket: WebSocket):
             {"role": "developer", "content": f"SYSTEM INFO: The current date and time is {now}. The caller's phone number is {caller_number}.\n\n{detail_block}\n\nSimply say: {greeting}"}
         )
         await task.queue_frames([LLMRunFrame()])
-
-    # Keep conversation history in memory and dump at the end to avoid blocking audio loop
-    call_history = []
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
