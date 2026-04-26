@@ -69,3 +69,7 @@ I will modify the SYSTEM_PROMPT file myself. You may suggest, but don't touch it
 *   **Create Contact**: The bot proactively creates new contact records for unrecognized callers using the `create_my_contact_record` tool as soon as they provide a first and last name. This ensures all inquiries are accurately logged in CiviCRM.
 *   **Safe Updates**: Data management tools (address, phone, email) are "add-only" or "primary-toggle" to prevent accidental deletion or overwriting of existing records. The bot cannot delete records.
 *   **Membership Intelligence**: Membership info now includes `join_date` and `start_date` alongside `end_date`, providing the bot with full context on the user's history with the makerspace.
+
+
+## 8. Deployment & CI/CD
+*   **Auto-Deployment**: The production stack (`call-bot` on port 17293) is configured to auto-update and redeploy automatically whenever changes are pushed to the `main` branch. 
