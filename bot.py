@@ -371,6 +371,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     }
                 },
                 required=["entity_type", "record_id"]
+            ),
+            FunctionSchema(
+                name="ask_support_bot",
+                description="Consult the 10BitWorks support bot for questions you cannot answer from your own knowledge. This tool takes several seconds to respond, so ALWAYS tell the caller something like 'Let me check on that for you' BEFORE calling this tool. Then relay the support bot's answer in your own words.",
+                properties={
+                    "question": {
+                        "type": "string",
+                        "description": "The caller's question, rephrased clearly for the support bot. Include any relevant context like whether they are a member or prospective member."
+                    }
+                },
+                required=["question"]
             )
         ],
         custom_tools={AdapterType.GEMINI: [{"google_search": {}}]},
@@ -579,6 +590,53 @@ async def websocket_endpoint(websocket: WebSocket):
         else:
             await params.result_callback({"status": "error", "message": result_data["message"]})
 
+    async def ask_support_bot_handler(params: FunctionCallParams):
+        question = params.arguments.get("question", "")
+        goclaw_url = os.getenv("GOCLAW_API_URL")
+        goclaw_key = os.getenv("GOCLAW_API_KEY")
+        goclaw_agent = os.getenv("GOCLAW_AGENT", "10bot")
+        
+        if not goclaw_url or not goclaw_key:
+            call_logger.error("GOCLAW_API_URL or GOCLAW_API_KEY not configured")
+            await params.result_callback({"status": "error", "message": "Support bot is not available right now."})
+            return
+        
+        call_logger.info(f"Consulting Goclaw support bot: {question[:80]}...")
+        
+        # Use caller's phone number as the Goclaw user ID for session continuity
+        goclaw_user_id = caller_number if caller_number != "Unknown Caller" else f"call-{call_sid}"
+        
+        try:
+            async with httpx.AsyncClient(timeout=25.0) as client:
+                response = await client.post(
+                    f"{goclaw_url.rstrip('/')}/v1/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {goclaw_key}",
+                        "X-GoClaw-User-Id": goclaw_user_id,
+                        "X-GoClaw-Agent": goclaw_agent,
+                        "Content-Type": "application/json"
+                    },
+                    json={
+                        "messages": [{"role": "user", "content": question}]
+                    }
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                answer = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                if answer:
+                    call_logger.info(f"Goclaw responded ({len(answer)} chars)")
+                    await params.result_callback({"status": "success", "answer": answer})
+                else:
+                    call_logger.warning("Goclaw returned empty response")
+                    await params.result_callback({"status": "error", "message": "The support bot didn't have an answer for that."})
+        except httpx.TimeoutException:
+            call_logger.error("Goclaw request timed out")
+            await params.result_callback({"status": "error", "message": "The support bot took too long to respond. Try answering from your own knowledge or suggest the caller check the website."})
+        except Exception as e:
+            call_logger.error(f"Goclaw request failed: {e}")
+            await params.result_callback({"status": "error", "message": "The support bot is temporarily unavailable."})
+
     llm.register_function("end_call", hang_up, timeout_secs=5.0)
     llm.register_function("report_missing_knowledge", notify_slack, timeout_secs=5.0)
     llm.register_function("transfer_call", transfer_call_handler, timeout_secs=5.0)
@@ -590,6 +648,7 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("add_new_email", add_email_handler, timeout_secs=5.0)
     llm.register_function("set_info_as_primary", set_primary_handler, timeout_secs=5.0)
     llm.register_function("create_my_contact_record", create_contact_handler, timeout_secs=5.0)
+    llm.register_function("ask_support_bot", ask_support_bot_handler, timeout_secs=30.0)
 
     async def session_warning_task():
         try:
