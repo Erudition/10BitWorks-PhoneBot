@@ -606,9 +606,15 @@ async def websocket_endpoint(websocket: WebSocket):
         # Use caller's phone number as the Goclaw user ID for session continuity
         goclaw_user_id = caller_number if caller_number != "Unknown Caller" else f"call-{call_sid}"
         
+        # Event to keep the Pipecat tool task alive
+        finished_event = asyncio.Event()
+        
         async def _fetch_and_inject():
             """Background task: query Goclaw and inject result into conversation context."""
             try:
+                # Give the bot time to speak its stall instruction before we potentially trigger speech again
+                await asyncio.sleep(0.5)
+                
                 async with httpx.AsyncClient(timeout=25.0) as client:
                     response = await client.post(
                         f"{goclaw_url.rstrip('/')}/v1/chat/completions",
@@ -638,6 +644,9 @@ async def websocket_endpoint(websocket: WebSocket):
             except Exception as e:
                 call_logger.error(f"Goclaw request failed: {e}")
                 return
+            finally:
+                # Signal the tool handler task that it can safely finish
+                finished_event.set()
             
             # Don't inject if the call is ending
             if is_terminating:
@@ -660,12 +669,22 @@ async def websocket_endpoint(websocket: WebSocket):
         
         # Fire off the background task (survives caller interruptions)
         asyncio.create_task(_fetch_and_inject())
-        
-        # Return immediately so the bot can stall naturally
+
+        # Return immediately to Pipecat framework so the bot can stall naturally
         await params.result_callback({
             "status": "processing",
             "instruction": "The support bot is looking this up now. Stall naturally while waiting — say something like 'Let me check on that for you' or 'One moment.' The answer will arrive shortly and be provided to you automatically."
         })
+
+        # Wait here to prevent the Pipecat tool handler task from finishing immediately.
+        # This works around a Pipecat bug where returning immediately while an interruption
+        # occurs causes a 'dictionary changed size during iteration' exception in _cancel_function_call.
+        # If the user interrupts, Pipecat safely cancels this task and we catch it here.
+        try:
+            await finished_event.wait()
+        except asyncio.CancelledError:
+            call_logger.debug("ask_support_bot_handler cancelled by interruption, background task survives.")
+            pass
 
     llm.register_function("end_call", hang_up, timeout_secs=5.0)
     llm.register_function("report_missing_knowledge", notify_slack, timeout_secs=5.0)
@@ -678,7 +697,7 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("add_new_email", add_email_handler, timeout_secs=5.0)
     llm.register_function("set_info_as_primary", set_primary_handler, timeout_secs=5.0)
     llm.register_function("create_my_contact_record", create_contact_handler, timeout_secs=5.0)
-    llm.register_function("ask_support_bot", ask_support_bot_handler, timeout_secs=5.0)
+    llm.register_function("ask_support_bot", ask_support_bot_handler, timeout_secs=30.0)
 
     async def session_warning_task():
         try:
