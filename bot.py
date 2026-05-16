@@ -579,17 +579,17 @@ async def websocket_endpoint(websocket: WebSocket):
         else:
             await params.result_callback({"status": "error", "message": result_data["message"]})
 
-    llm.register_function("end_call", hang_up, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("report_missing_knowledge", notify_slack, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("transfer_call", transfer_call_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("lookup_contact", lookup_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("check_my_membership", get_membership_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("list_my_contact_info", list_info_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("add_new_address", add_address_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("add_new_phone", add_phone_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("add_new_email", add_email_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("set_info_as_primary", set_primary_handler, cancel_on_interruption=False, timeout_secs=5.0)
-    llm.register_function("create_my_contact_record", create_contact_handler, cancel_on_interruption=False, timeout_secs=5.0)
+    llm.register_function("end_call", hang_up, timeout_secs=5.0)
+    llm.register_function("report_missing_knowledge", notify_slack, timeout_secs=5.0)
+    llm.register_function("transfer_call", transfer_call_handler, timeout_secs=5.0)
+    llm.register_function("lookup_contact", lookup_contact_handler, timeout_secs=5.0)
+    llm.register_function("check_my_membership", get_membership_handler, timeout_secs=5.0)
+    llm.register_function("list_my_contact_info", list_info_handler, timeout_secs=5.0)
+    llm.register_function("add_new_address", add_address_handler, timeout_secs=5.0)
+    llm.register_function("add_new_phone", add_phone_handler, timeout_secs=5.0)
+    llm.register_function("add_new_email", add_email_handler, timeout_secs=5.0)
+    llm.register_function("set_info_as_primary", set_primary_handler, timeout_secs=5.0)
+    llm.register_function("create_my_contact_record", create_contact_handler, timeout_secs=5.0)
 
     async def session_warning_task():
         try:
