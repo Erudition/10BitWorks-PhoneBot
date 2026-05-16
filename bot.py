@@ -606,36 +606,62 @@ async def websocket_endpoint(websocket: WebSocket):
         # Use caller's phone number as the Goclaw user ID for session continuity
         goclaw_user_id = caller_number if caller_number != "Unknown Caller" else f"call-{call_sid}"
         
-        try:
-            async with httpx.AsyncClient(timeout=25.0) as client:
-                response = await client.post(
-                    f"{goclaw_url.rstrip('/')}/v1/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {goclaw_key}",
-                        "X-GoClaw-User-Id": goclaw_user_id,
-                        "X-GoClaw-Agent": goclaw_agent,
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "messages": [{"role": "user", "content": question}]
-                    }
-                )
-                response.raise_for_status()
-                data = response.json()
-                
-                answer = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-                if answer:
+        async def _fetch_and_inject():
+            """Background task: query Goclaw and inject result into conversation context."""
+            try:
+                async with httpx.AsyncClient(timeout=25.0) as client:
+                    response = await client.post(
+                        f"{goclaw_url.rstrip('/')}/v1/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {goclaw_key}",
+                            "X-GoClaw-User-Id": goclaw_user_id,
+                            "X-GoClaw-Agent": goclaw_agent,
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "messages": [{"role": "user", "content": question}]
+                        }
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                    
+                    answer = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                    if not answer:
+                        call_logger.warning("Goclaw returned empty response")
+                        return
+                    
                     call_logger.info(f"Goclaw responded ({len(answer)} chars)")
-                    await params.result_callback({"status": "success", "answer": answer})
-                else:
-                    call_logger.warning("Goclaw returned empty response")
-                    await params.result_callback({"status": "error", "message": "The support bot didn't have an answer for that."})
-        except httpx.TimeoutException:
-            call_logger.error("Goclaw request timed out")
-            await params.result_callback({"status": "error", "message": "The support bot took too long to respond. Try answering from your own knowledge or suggest the caller check the website."})
-        except Exception as e:
-            call_logger.error(f"Goclaw request failed: {e}")
-            await params.result_callback({"status": "error", "message": "The support bot is temporarily unavailable."})
+                    
+            except httpx.TimeoutException:
+                call_logger.error("Goclaw request timed out")
+                return
+            except Exception as e:
+                call_logger.error(f"Goclaw request failed: {e}")
+                return
+            
+            # Don't inject if the call is ending
+            if is_terminating:
+                call_logger.info("Call is terminating, discarding Goclaw response")
+                return
+            
+            # Wait for bot to finish speaking before injecting (same pattern as hangup)
+            await await_bot_silence()
+            
+            # Inject the result as a developer message and trigger speech
+            context.add_message({
+                "role": "developer",
+                "content": f"SUPPORT BOT RESPONSE: The support bot answered the question '{question}' as follows:\n\n{answer}\n\nRelay this information to the caller naturally, in your own voice. Do not mention the support bot or that you looked anything up."
+            })
+            await task.queue_frames([LLMRunFrame()])
+        
+        # Fire off the background task (survives caller interruptions)
+        asyncio.create_task(_fetch_and_inject())
+        
+        # Return immediately so the bot can stall naturally
+        await params.result_callback({
+            "status": "processing",
+            "instruction": "The support bot is looking this up now. Stall naturally while waiting — say something like 'Let me check on that for you' or 'One moment.' The answer will arrive shortly and be provided to you automatically."
+        })
 
     llm.register_function("end_call", hang_up, timeout_secs=5.0)
     llm.register_function("report_missing_knowledge", notify_slack, timeout_secs=5.0)
@@ -648,7 +674,7 @@ async def websocket_endpoint(websocket: WebSocket):
     llm.register_function("add_new_email", add_email_handler, timeout_secs=5.0)
     llm.register_function("set_info_as_primary", set_primary_handler, timeout_secs=5.0)
     llm.register_function("create_my_contact_record", create_contact_handler, timeout_secs=5.0)
-    llm.register_function("ask_support_bot", ask_support_bot_handler, timeout_secs=30.0)
+    llm.register_function("ask_support_bot", ask_support_bot_handler, timeout_secs=5.0)
 
     async def session_warning_task():
         try:
