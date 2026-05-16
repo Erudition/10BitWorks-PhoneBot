@@ -374,7 +374,7 @@ async def websocket_endpoint(websocket: WebSocket):
             ),
             FunctionSchema(
                 name="ask_support_bot",
-                description="Consult the 10BitWorks support bot for questions you cannot answer from your own knowledge. This tool takes several seconds to respond, so ALWAYS tell the caller something like 'Let me check on that for you' BEFORE calling this tool. Then relay the support bot's answer in your own words.",
+                description="Consult the 10BitWorks support bot for questions you cannot answer from your own knowledge. Call this tool IMMEDIATELY when you don't know the answer. The tool will automatically return a 'processing' instruction telling you to stall naturally while it fetches the answer in the background.",
                 properties={
                     "question": {
                         "type": "string",
