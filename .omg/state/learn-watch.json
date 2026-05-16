@@ -1,0 +1,12 @@
+{
+  "last_session_id": "3dbedc92-f79d-4535-a563-3975a25c1cd7",
+  "last_event_key": "3dbedc92-f79d-4535-a563-3975a25c1cd7:transcript:b2ed109f16522d6f411a174bc11d99899e720c618cef26ae2c33e43507444d63",
+  "last_prompted_session_id": "",
+  "last_reason": "short-session",
+  "last_prompted_at": "",
+  "last_user_message_count": 0,
+  "last_actionable_message_count": 0,
+  "deep_interview_lock_active": false,
+  "deep_interview_lock_source": "/home/adroit/Projects/10BitWorks/Hosted Services/Phone Assistant/.omg/state/deep-interview.json",
+  "updated_at": "2026-05-03T21:13:12.817Z"
+}
