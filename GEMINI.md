@@ -33,7 +33,7 @@ I will modify the SYSTEM_PROMPT file myself. You may suggest, but don't touch it
     *   *Implementation*: Select the voice at the start of the `websocket_endpoint` and inject it into the `GeminiLiveLLMService` settings. Log the selected voice in the per-call log file.
 
 ## 2. Tool Calling with Gemini 3.1 Live
-*   **No Asynchronous Function Calling**: Gemini 3.1 Flash Live Preview does **not** currently support native asynchronous tool calling.
+*   **No Explicit `cancel_on_interruption=False`**: Current Pipecat versions explicitly reject `cancel_on_interruption=False` for Gemini Live models (it raises a fatal `ErrorFrame`). The framework now handles async tool result delivery internally via its built-in `async_tool_cancellation` mechanism. Use the default (`cancel_on_interruption=True`, or omit the parameter) for all `register_function` calls. Pipecat still ensures the mandatory `functionResponse` is sent to the Gemini WebSocket.
     *   *Workaround*: If a tool needs to perform a network request (e.g., posting to Slack), the tool handler *must* return a success payload to the LLM immediately (via `await params.result_callback(...)`) and dispatch the actual work to a background task (e.g., `asyncio.create_task(send_to_slack(...))`). This prevents the bot from "stuttering" or hanging while waiting for the tool to finish.
 *   **Separation of Lookup and Action**: Do not combine information gathering (lookup) and state mutation (e.g., transferring a call) into a single tool. Gemini may speculatively call a tool multiple times to gather options for the user.
     *   *Example*: Use `lookup_contact` to get a phone number, then require the bot to explicitly call `transfer_call` after presenting options to the user.
