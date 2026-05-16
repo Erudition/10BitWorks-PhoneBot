@@ -20,7 +20,7 @@ os.makedirs("logs", exist_ok=True)
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import AdapterType, ToolsSchema
-from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties, TextFrame, AudioRawFrame, LLMContextFrame
+from pipecat.frames.frames import LLMRunFrame, EndFrame, CancelTaskFrame, EndTaskFrame, BotStartedSpeakingFrame, BotStoppedSpeakingFrame, Frame, TranscriptionFrame, FunctionCallResultProperties, TextFrame, AudioRawFrame, LLMContextFrame, LLMMessagesAppendFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
@@ -647,12 +647,16 @@ async def websocket_endpoint(websocket: WebSocket):
             # Wait for bot to finish speaking before injecting (same pattern as hangup)
             await await_bot_silence()
             
-            # Inject the result as a developer message and trigger speech
-            context.add_message({
+            msg = {
                 "role": "developer",
                 "content": f"SUPPORT BOT RESPONSE: The support bot answered the question '{question}' as follows:\n\n{answer}\n\nRelay this information to the caller naturally, in your own voice. Do not mention the support bot or that you looked anything up."
-            })
-            await task.queue_frames([LLMRunFrame()])
+            }
+            
+            # Inject into local context for bookkeeping
+            context.add_message(msg)
+            
+            # Push directly to GeminiLiveLLMService to bypass aggregators and send to WebSocket
+            await llm.process_frame(LLMMessagesAppendFrame([msg]), FrameDirection.DOWNSTREAM)
         
         # Fire off the background task (survives caller interruptions)
         asyncio.create_task(_fetch_and_inject())
