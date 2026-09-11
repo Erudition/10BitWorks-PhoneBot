@@ -210,24 +210,25 @@ class CallerMuter(FrameProcessor):
 
 
 class JitterBufferProcessor(FrameProcessor):
-    """Buffers the first N milliseconds of each bot utterance before releasing
-    them to the transport, creating a head-start that absorbs Gemini's
-    generation jitter.
+    """Buffers the first N milliseconds of each bot utterance by wall-clock
+    time before releasing them to the transport, creating a head-start that
+    absorbs Gemini's generation jitter.
 
-    The FastAPI WebSocket transport drains its audio queue at 2x real-time
-    (send_interval = chunk_duration / 2).  Without buffering, even a brief
-    stutter in Gemini's audio generation starves the queue and produces an
-    audible gap on the phone.  By holding back the initial burst and then
-    flushing it all at once, the transport's pacing loop naturally builds a
-    backlog that acts as a continuous jitter buffer for the rest of the
-    utterance.
+    Why wall-clock time instead of byte count:
+    Gemini Live delivers audio in large irregular bursts (3-5KB each,
+    190-340ms of audio per burst). A byte-count threshold is useless because
+    a single burst exceeds any reasonable threshold, causing the buffer to
+    flush instantly without actually smoothing anything. By holding frames
+    for a fixed wall-clock duration (e.g. 200ms), we guarantee the transport
+    has a real backlog of re-chunked 20ms packets before it starts sending,
+    absorbing gaps between subsequent Gemini bursts.
 
     Non-audio frames always pass through immediately.
     """
 
     # States
     _STATE_WAITING = "waiting"      # No audio yet, waiting for first frame
-    _STATE_BUFFERING = "buffering"  # Accumulating initial audio
+    _STATE_BUFFERING = "buffering"  # Accumulating audio, timer running
     _STATE_PASSTHROUGH = "passing"  # Buffer flushed, passing frames directly
 
     def __init__(self, buffer_ms: int = 200, sample_rate: int = 8000, call_logger=None):
@@ -235,29 +236,40 @@ class JitterBufferProcessor(FrameProcessor):
         self._buffer_ms = buffer_ms
         self._sample_rate = sample_rate
         self._call_logger = call_logger
-        # 16-bit mono PCM: 2 bytes per sample
-        self._threshold_bytes = int(sample_rate * 2 * (buffer_ms / 1000))
+        self._flush_task: asyncio.Task | None = None
         self._reset()
 
     def _reset(self):
         """Reset to the waiting state for a new utterance."""
+        if self._flush_task and not self._flush_task.done():
+            self._flush_task.cancel()
+        self._flush_task = None
         self._state = self._STATE_WAITING
-        self._audio_buffer = bytearray()
         self._buffered_frames: list[TTSAudioRawFrame] = []
 
     async def _flush_buffer(self):
         """Release all buffered audio frames downstream."""
         if self._buffered_frames:
+            total_bytes = sum(len(f.audio) for f in self._buffered_frames)
+            audio_ms = total_bytes / (self._sample_rate * 2) * 1000
             if self._call_logger:
                 self._call_logger.debug(
-                    f"JitterBuffer: flushing {len(self._audio_buffer)} bytes "
-                    f"({len(self._buffered_frames)} frames) after "
-                    f"{len(self._audio_buffer) / (self._sample_rate * 2) * 1000:.0f}ms"
+                    f"JitterBuffer: flushing {total_bytes} bytes "
+                    f"({len(self._buffered_frames)} frames, {audio_ms:.0f}ms of audio) "
+                    f"after {self._buffer_ms}ms timer"
                 )
             for frame in self._buffered_frames:
                 await self.push_frame(frame, FrameDirection.DOWNSTREAM)
-            self._audio_buffer = bytearray()
             self._buffered_frames = []
+
+    async def _timer_flush(self):
+        """Background task: sleep for buffer_ms then flush and go passthrough."""
+        try:
+            await asyncio.sleep(self._buffer_ms / 1000.0)
+            await self._flush_buffer()
+            self._state = self._STATE_PASSTHROUGH
+        except asyncio.CancelledError:
+            pass
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -277,18 +289,14 @@ class JitterBufferProcessor(FrameProcessor):
                 self._state = self._STATE_BUFFERING
                 if self._call_logger:
                     self._call_logger.debug(
-                        f"JitterBuffer: started buffering (threshold={self._threshold_bytes}B / {self._buffer_ms}ms)"
+                        f"JitterBuffer: started buffering (timer={self._buffer_ms}ms)"
                     )
+                # Start the wall-clock timer
+                self._flush_task = asyncio.create_task(self._timer_flush())
 
             if self._state == self._STATE_BUFFERING:
-                self._audio_buffer.extend(frame.audio)
                 self._buffered_frames.append(frame)
-
-                if len(self._audio_buffer) >= self._threshold_bytes:
-                    # Threshold met — flush everything and switch to passthrough
-                    await self._flush_buffer()
-                    self._state = self._STATE_PASSTHROUGH
-                return  # Don't push yet while buffering
+                return  # Don't push yet — timer will flush
 
             # _STATE_PASSTHROUGH — let it through immediately
             await self.push_frame(frame, direction)

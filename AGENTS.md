@@ -41,8 +41,9 @@ I will modify the SYSTEM_PROMPT file myself. You may suggest, but don't touch it
 *   **Immediate Hangup Prompts**: To ensure the bot hangs up in the same conversational turn as its farewell, the tool description for `end_call` must include strong directives (e.g., "CRITICAL: You MUST call this tool immediately in the exact same turn after you say goodbye...").
 
 ## 3. Twilio Audio Pacing and Stability
-*   **Strict 20ms Pacing**: Twilio Media Streams expect 8kHz, 16-bit mono audio (320 bytes = 20ms chunks). Use Pipecat's **`fixed_audio_packet_size=320`** setting in `FastAPIWebsocketParams`. This ensures perfectly timed packets without the overhead of higher-level chunking.
-*   **Avoid Chunks and Schedulers**: Do **NOT** use `audio_out_10ms_chunks`, `FixedSizeScheduler`, or `prefatory_silence_threshold`. These can interfere with the native framing and cause "clicking" or "speed-run" distorted audio.
+*   **Strict 20ms Pacing**: Twilio Media Streams expect 8kHz µ-law audio in 20ms payloads. Use `audio_out_10ms_chunks=2` in `FastAPIWebsocketParams` to make Pipecat accumulate exactly 20ms of PCM before passing it to the `TwilioFrameSerializer`, which converts it to 160 bytes of µ-law and wraps it in a JSON media message.
+*   **`fixed_audio_packet_size` is irrelevant for Twilio**: This parameter only applies to binary (`bytes`) WebSocket payloads. Since the Twilio serializer returns JSON strings, Pipecat's `_write_frame` method skips the fixed-packet chunking entirely. The only way to control Twilio audio granularity is `audio_out_10ms_chunks`.
+*   **Avoid `FixedSizeScheduler` and `prefatory_silence_threshold`**: These can interfere with native framing and cause "clicking" or "speed-run" distorted audio.
 
 ## 4. Graceful Shutdown & The 30-Second Gemini Bug
 *   **The Bug**: Gemini 3.1 Live defers the processing of `EndFrame` for 30 seconds after the bot finishes speaking, which causes the Twilio call to hang in silence if a standard `EndTaskFrame` is used.
@@ -141,8 +142,20 @@ I will modify the SYSTEM_PROMPT file myself. You may suggest, but don't touch it
 *   **Signs**: A second greeting mid-recording, a different bot voice (each session picks a random voice), and a new `call_id` in the logs from the same `caller_number` appearing seconds after a `transfer_call` or `post_bot` entry.
 *   **Root Cause**: This almost always means the bot transferred the caller to its own number (see §19) or a Studio flow redirect looped back to the bot after a failed `<Dial>`.
 
-## 22. Jitter Buffer and Twilio Payload Pacing
-*   **The Bug**: Prior to Sept 2026, `audio_out_10ms_chunks` defaulted to 4, which meant Pipecat accumulated 40ms of audio before passing it to the `TwilioFrameSerializer`. The serializer would then bundle the entire 40ms into a single JSON payload. However, **Twilio Media Streams strictly expects 20ms payloads**. Hitting Twilio with 40ms payloads every 40ms caused Twilio to drop/clip the excess audio, resulting in audible "skips" (especially at the very start of a sentence). 
-*   **The Pacing Fix**: By setting `audio_out_10ms_chunks=2` in `FastAPIWebsocketParams`, Pipecat correctly batches audio into exactly 20ms frames (160 bytes of ulaw). The transport then paces the websocket writes at exactly 20ms intervals. This natively aligns with Twilio's requirements and prevents the clipping.
-*   **The JitterBuffer Fix**: The FastAPI WebSocket transport paces output at exactly 1x real-time. If Gemini's generation pauses for even a few milliseconds, the Pipecat queue empties, and no payload is sent for that 20ms window (causing a stutter). To counteract this, a `JitterBufferProcessor` is placed immediately before `transport.output()`. It buffers the first 200ms of each utterance before releasing the burst downstream. This gives Pipecat's 1x transport a 200ms head start, absorbing LLM generation jitter. 
-*   **Irrelevance of `fixed_audio_packet_size`**: The `fixed_audio_packet_size` parameter in `FastAPIWebsocketParams` ONLY works for binary websocket frames (`bytes`). Because Twilio expects JSON string frames, Pipecat ignores the parameter entirely. The only way to chunk Twilio audio in Pipecat is via `audio_out_10ms_chunks`.
+## 22. Jitter Buffer — Investigation Trail and Lessons
+
+### The Error Trail (Sept 2026)
+This section documents three successive incorrect diagnoses made by an AI agent, preserved as a cautionary example of confident-but-wrong reasoning:
+
+1.  **"2x Send Rate" Theory (WRONG)**: The agent read Pipecat's `_send_interval = (audio_chunk_size / sample_rate) / 2` and concluded the transport sends audio at 2x real-time. This was a math error: `audio_chunk_size` is in **bytes** (not samples), and 16-bit audio is 2 bytes per sample. The `/2` in the formula corrects for the bytes-vs-samples unit mismatch, making the actual send rate **1x real-time**. A jitter buffer was built to solve a problem that didn't exist.
+2.  **"Twilio Clips 40ms Payloads" Theory (UNVERIFIED)**: After the 1x-rate correction, the agent theorized that sending 40ms payloads (from `audio_out_10ms_chunks=4` default) caused Twilio to clip/drop excess audio. While switching to `audio_out_10ms_chunks=2` (20ms payloads) is correct per Twilio docs, the claim that Twilio actively clips larger payloads was never verified — skips persisted after the change.
+3.  **"Byte-Count Buffering" (USELESS)**: The original `JitterBufferProcessor` triggered its flush when accumulated bytes exceeded a threshold (e.g. 3200B = 200ms). Log analysis revealed Gemini Live delivers audio in **large irregular bursts** (3-5KB per burst, 190-340ms of audio each). A single burst exceeded any threshold, so the buffer flushed instantly on the first frame — providing zero actual smoothing.
+
+### The Actual Root Cause
+*   **Gemini's Bursty Audio Delivery**: `GeminiLiveLLMService` emits one `TTSAudioRawFrame` per `inline_data` chunk from Google's WebSocket. Each chunk is however large Google decides to send (typically 3-5KB). Between bursts, there are gaps of variable length. During these gaps, the transport's audio queue drains, Twilio receives no packets, and the caller hears a skip.
+*   **Why Skips Concentrate Early**: The first few bot responses process a ~17K-token system prompt. During this warm-up, Gemini's generation is jittery with longer inter-burst gaps. After the KV cache warms up (~1 minute in), generation smooths out and gaps between bursts shrink below the transport's queue depth.
+
+### The Fix: Wall-Clock Time Buffering
+*   The redesigned `JitterBufferProcessor` in `processors.py` uses an `asyncio.create_task` timer instead of a byte-count threshold. When the first audio frame of a new utterance arrives, it starts a wall-clock timer (200ms). All frames arriving during this window are held. When the timer fires, the entire buffer is flushed downstream. The transport then re-chunks the burst into 20ms packets and paces them at 1x real-time — giving it a 200ms head-start that absorbs subsequent inter-burst gaps from Gemini.
+*   **Pipeline Position**: Must be placed immediately before `transport.output()` (after `metrics_logger`).
+*   **Reset Behavior**: Resets (cancels timer, flushes partial buffer) on `TTSStoppedFrame` or `InterruptionFrame` to prevent audio carry-over between utterances.
